@@ -23,6 +23,28 @@ export PYTHONPATH="$(pwd)/install/lib/python3.9/site-packages:${PYTHONPATH}"
 export PATH="$(pwd)/install/bin:${PATH}"
 ```
 
+### Build System Information and Dependencies
+
+- Build system: meson
+- Standard: C++23
+- Python bindings: pybind11
+- Dependencies:
+  - Build only:
+      - pybind11
+      - meson-python
+      - meson
+  - Core:
+      - XtcData
+      - spdlog
+      - mpi (for MPI implementation)
+  - Calibration:
+      - Rapidjson
+      - cpp-httplib
+  - HDF5
+      - HDF5
+
+**Note:** Dependencies are statically linked currently. They are `rapidjson`, `cpp-httplib`, and `spdlog` (plus its `fmt` dependency) are included as meson subprojects in this repository.
+
 ## Logging
 
 `spdlog` is used for logging. You can set the log level with an environment variable:
@@ -162,4 +184,14 @@ There are four main objects:
 4. `DataSource`: A small wrapper class which provides easy access to creating `Detector` objects through its `detector` function.
 
 These classes are defined in each implementation in their respective namespaces. E.g. you have `XTCPP::Base::DataSource` held in the `src/common` folder. The concrete implementation is in `XTCPP::MPI::DataSource` for an MPI-aware version.
+
+## TODO List
+
+In priority order the current features and improvements to work on are:
+
+1. Finish calibration constants selection and make `calibrate` function general (only works on jungfrau).
+2. "Live mode" support to allow reading XTC2 files as they are written.
+3. Scans - support the DAQ scans.
+4. epics - `PvaDetector` should be semi-supported; however, `epicsArch` is not.
+5. Finish the HDF5 writing implementation.
 
