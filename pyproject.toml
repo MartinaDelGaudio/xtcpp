@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools", "numpy", "meson-python", "pybind11"]
+build-backend = "mesonpy"
+
+[project]
+name = "xtcpp"
+description="XTC Parallel Processing. A parallel IO library for XTC2 files from LCLS."
+requires-python = ">=3.8"
+dynamic = ["version"]
+
+[tool.meson-python.args]
+# Need to do this.... I couldn't for the life of me figure out how to get meson
+# meson-python and the subprojects to work well together for installing the
+# shared library...
+install = ['--skip-subprojects']
+
