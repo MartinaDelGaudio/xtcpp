@@ -42,9 +42,14 @@ namespace XTCPP {
     size_t DataSource::load_next_offsets() {
       size_t n_new_offsets{0};
       for (auto& reader : m_xtc_readers_in_use) {
-        size_t n_det_new_offsets = reader->get_next_offsets();
-        n_new_offsets =
-          n_det_new_offsets > n_new_offsets ? n_det_new_offsets : n_new_offsets;
+        auto ret = reader->get_next_offsets();
+        if (ret.has_value()) {
+          size_t n_det_new_offsets = ret.value();
+            n_new_offsets =
+            n_det_new_offsets > n_new_offsets ? n_det_new_offsets : n_new_offsets;
+        } else {
+          // Handle errors?
+        }
       }
       return n_new_offsets;
     }

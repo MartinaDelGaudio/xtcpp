@@ -1,7 +1,9 @@
 #include "datasource.hh"
-#include "detector.hh"
-#include "../common/detector.hh"
+
 #include "bd_reader.hh"
+#include "detector.hh"
+
+#include "common/detector.hh"
 
 #include "mpi.h"
 
@@ -39,8 +41,7 @@ namespace XTCPP {
                        &m_idx_window     /* Window */
       );
       if (m_rank == 0) {
-        // This is okay because it gets allocated above and is not null on rank
-        // 0
+        // This is okay because it gets allocated above and is not null on rank 0
         *m_curr_idx = 0;
       }
       m_offset_indices.resize(m_events_per_read);
@@ -111,18 +112,23 @@ namespace XTCPP {
           std::string serno = det_reader_sernos[idx];
           seg_to_serno[seg_no] = serno;
         }
-        size_t n_new_offsets = det_reader->get_next_offsets();
-        if (n_new_offsets > m_last_offset_index + 1) {
-          m_last_offset_index = n_new_offsets - 1;
-        }
-        m_xtc_readers_in_use.push_back(det_reader);
+        auto ret = det_reader->get_next_offsets();
+        if (ret.has_value()) {
+          size_t n_new_offsets = ret.value();
+            if (n_new_offsets > m_last_offset_index + 1) {
+              m_last_offset_index = n_new_offsets - 1;
+            }
 
-	if (det_type.empty()) {
-	  det_type = det_reader->det_types()[detname];
-	}
+          m_xtc_readers_in_use.push_back(det_reader);
+        } else {
+          // Handle errors?
+        }
+
+        if (det_type.empty()) {
+          det_type = det_reader->det_types()[detname];
+        }
       }
 
-      //std::string full_serial_no = serial_nos[0];
       // Will need to capture the actual detector type, use placeholder for now
       std::string full_serial_no = det_type;
       for (size_t i=0; i<serial_nos.size(); ++i) {
@@ -134,8 +140,8 @@ namespace XTCPP {
                                                                        full_serial_no,
                                                                        segments,
                                                                        det_readers,
-								       m_experiment,
-								       m_run);
+                                                                       m_experiment,
+                                                                       m_run);
       return det;
     }
 

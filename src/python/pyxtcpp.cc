@@ -45,9 +45,9 @@ PYBIND11_MAKE_OPAQUE(XTCPP::Base::BDReader)
 PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
   m.doc() = "XTCPP Python bindings.";
 
-  py::class_<XTCPP::XtcOffset>(m, "XtcOffset")
-    .def_readwrite("offset", &XTCPP::XtcOffset::offset)
-    .def_readwrite("size", &XTCPP::XtcOffset::size);
+  py::class_<XTCPP::BDXtcOffset>(m, "BDXtcOffset")
+    .def_readwrite("offset", &XTCPP::BDXtcOffset::offset)
+    .def_readwrite("size", &XTCPP::BDXtcOffset::size);
 
   py::class_<XTCPP::MPI::DataSource>(m, "DataSource")
     .def(py::init<std::string,
@@ -180,7 +180,7 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
 						    events_per_read);
 		  }))
     .def("get_next_offsets", &XTCPP::MPI::BDReader::get_next_offsets)
-    .def("get_dgram", &XTCPP::MPI::BDReader::get_dgram)
+    .def("get_dgram_at", &XTCPP::MPI::BDReader::get_dgram_at)
     .def("get_data", &XTCPP::MPI::BDReader::get_data)
     .def("detnames", &XTCPP::MPI::BDReader::detnames)
     .def("segments", &XTCPP::MPI::BDReader::segment_numbers)

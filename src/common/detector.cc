@@ -58,7 +58,7 @@ namespace XTCPP {
       }
     }
   }
-  
+
   std::vector<std::float32_t> calibrate(std::vector<void*>& data_ptrs,
                                         std::span<CalibStruct>& calibconst) {
     auto data_mask = 0x3FFF;
@@ -410,7 +410,13 @@ namespace XTCPP {
 
     XtcData::Dgram* Detector::operator()(size_t offset_idx) {
       auto& reader = m_xtc_readers[0];
-      return reader->get_dgram(offset_idx);
+      auto ret = reader->get_dgram_at(offset_idx);
+      if (ret.has_value()) {
+        return ret.value();
+      } else {
+        /// Handle errors?
+        return nullptr;
+      }
     }
 
     void* Detector::get_data(size_t offset_idx,
@@ -423,25 +429,30 @@ namespace XTCPP {
         offset_idx);
       */
       for (auto& reader : m_xtc_readers) {
-        XtcData::Dgram* dg = reader->get_dgram(offset_idx);
-        if (dg) {
-          //m_logger->trace("** Have a non-null dgram return. Now accessing the data field.");
-          std::vector<unsigned> reader_seg_nos = reader->segment_numbers()[m_detname];
-          auto seg_no_it = reader_seg_nos.begin();
-          while (seg_no_it != reader_seg_nos.end()) {
-            auto [data_ptr, data_size] = reader->get_data(m_detname,
-                                                          *seg_no_it,
-                                                          alg,
-                                                          data_name);
+        auto ret = reader->get_dgram_at(offset_idx);
+        if (ret.has_value()) {
+          XtcData::Dgram* dg = ret.value();
+          if (dg) {
+            //m_logger->trace("** Have a non-null dgram return. Now accessing the data field.");
+            std::vector<unsigned> reader_seg_nos = reader->segment_numbers()[m_detname];
+            auto seg_no_it = reader_seg_nos.begin();
+            while (seg_no_it != reader_seg_nos.end()) {
+              auto [data_ptr, data_size] = reader->get_data(m_detname,
+                                                            *seg_no_it,
+                                                            alg,
+                                                            data_name);
 
-            m_data_ptrs[*seg_no_it] = data_ptr;
-            m_data_sizes[*seg_no_it] = data_size;
+              m_data_ptrs[*seg_no_it] = data_ptr;
+              m_data_sizes[*seg_no_it] = data_size;
 
-            //m_logger->trace("*** Filled in data for segment # {}", *seg_no_it);
-            seg_no_it++;
+              //m_logger->trace("*** Filled in data for segment # {}", *seg_no_it);
+              seg_no_it++;
+            }
+          } else {
+            m_logger->debug("Returning null");
+            return nullptr;
           }
         } else {
-          m_logger->debug("Returning null");
           return nullptr;
         }
       }

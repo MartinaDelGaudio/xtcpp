@@ -9,6 +9,7 @@
 
 #include <stdio.h>
 
+#include <expected>
 #include <map>
 #include <memory>
 #include <string>
@@ -21,14 +22,16 @@ namespace XTCPP
    * Holds information about the offset and size of a single datagram in an XTC2
    * file. A vector/array of these should be used to represent the offsets of an
    * entire XTC2 or a portion of it.
+   * Note, the offset and size refer to the "big data" XTC2 files. They are however,
+   * the stored in the smalldata .smd.xtc2 files.
    */
 #pragma pack(push, 1)
-  struct XtcOffset {
-    XtcOffset()
+  struct BDXtcOffset {
+    BDXtcOffset()
       : offset(0)
       , size(0)
     {}
-    XtcOffset(uint64_t offset_, uint64_t size_)
+    BDXtcOffset(uint64_t offset_, uint64_t size_)
       : offset(offset_)
       , size(size_)
     {}
@@ -36,6 +39,15 @@ namespace XTCPP
     uint64_t size; ///< Size of the datagram
   };
 #pragma pack(pop)
+
+  enum class SMDReadError {
+    UnimplementedBaseFunction,
+    ZeroBytesRead,
+    NoOffsetInData,
+    DgramHeaderError,
+    PayloadTruncatedError,
+    GeneralIOError
+  };
 
   using AlgDataNameIndex = std::map<std::string, std::map<std::string, std::map<unsigned, XtcData::NameIndex>>>;
   namespace Base {
@@ -51,33 +63,84 @@ namespace XTCPP
 
       virtual ~SMDReader() {}
 
+      /* Synchronous API */
       /**
-       * Return the pointer to the next Dgram
+       * Trigger a read of the .smd.xtc2 file.
+       * This is a blocking call.
+       */
+      virtual std::expected<void, SMDReadError> read() {
+        return std::unexpected(SMDReadError::UnimplementedBaseFunction);
+      };
+
+      /* Asynchronous API  */
+      /**
+       * Trigger an asynchronous read of the .smd.xtc2 file.
+       */
+      virtual std::expected<void, SMDReadError> iread() {
+        return std::unexpected(SMDReadError::UnimplementedBaseFunction);
+      };
+
+      /**
+       * Wait on an asynchronous read of the .smd.xtc2 file.
+       * This can be called immediately after such or separated as needed.
+       */
+      virtual std::expected<void, SMDReadError> wait() {
+        return std::unexpected(SMDReadError::UnimplementedBaseFunction);
+      };
+
+      /* Data access  */
+
+      /**
+       * Return the pointer to the current datagram.
+       * This should be called after either `read` or `iread` combined with `wait`
+       * @return dgram The pointer to the current datagram.
+       */
+      virtual XtcData::Dgram* get_current_dgram() {
+        return reinterpret_cast<XtcData::Dgram*>(m_access_ptr +
+                                                 m_access_offset);
+      }
+
+      /**
+       * Construct the offset instance into a provided buffer.
+       * This should be called after having performed a read. The offset will be
+       * extracted from the datagram and constructed in the buffer provided.
+       *
+       * An array is expected that is of size `events_per_read`. The `SMDReader`
+       * instance will make sure to keep track of the number of events that have
+       * been read so far so as to construct the BDXtcOffset in the correct place
+       * of the external buffer's total memory.
+       *
+       * Note: The function also returns a pointer to the datagram/offset.
+       *       this is because it uses a nullptr as a return value to indicate
+       *       an error, or that there is no further offset to construct.
+       *
+       * @param[in] external_buf An external buffer that the BDXtcOffset objects
+       *            will be constructed into.
        * @return dgram The pointer to the next datagram.
        */
-      virtual XtcData::Dgram* next() { return nullptr; } ///< Return the pointer to the next Dgram
+      XtcData::Dgram* get_offset_into(std::shared_ptr<BDXtcOffset[]> external_buf);
+
+      /**
+       * Construct the offset instance and return it.
+       * This should be called after having performed a read. The offset will be
+       * extracted from the datagram.
+       *
+       * @param[in] external_buf An external buffer that the BDXtcOffset objects
+       *            will be constructed into.
+       * @return offset The offset constructed from the current datagram.
+       */
+      std::expected<BDXtcOffset, SMDReadError> get_offset();
 
       /**
        * Return the pointer to the next Dgram AND construct offsets into memory.
-       * @param[in] external_buf An external buffer that the XtcOffset objects will
+       * @param[in] external_buf An external buffer that the BDXtcOffset objects will
        *            be constructed into while the SMDReader is iterating through the
        *            .smd.xtc2 file.
        * @return dgram The pointer to the next datagram.
        */
-      XtcData::Dgram* next(std::shared_ptr<XtcOffset[]> external_buf);
+      XtcData::Dgram* next(std::shared_ptr<BDXtcOffset[]> external_buf);
 
-      /**
-       * Trigger a read of the .smd.xtc2 file.
-       */
-      virtual void read() {};
-
-      /**
-       * Wait on a read of the .smd.xtc2 file. Depending on the implementation
-       * the read function may be implemented as non-blocking, so these two can
-       * be called one after another, or separated as needed.
-       */
-      virtual char* wait() { return nullptr; };
-
+      /* Getters etc - get general information */
       /**
        * Max size of a datagram (used for building buffers for reads.)
        */
@@ -112,6 +175,18 @@ namespace XTCPP
       alg_map() const { return m_alg_map; }
 
     protected:
+      virtual void init_file() {}
+
+      void recurse_dgram_xtcs(XtcData::Xtc *xtc,
+                              XtcData::TransitionId::Value transition_id);
+    private:
+      void extract_offset_from_dgram_into(
+          XtcData::Xtc *xtc, std::shared_ptr<BDXtcOffset[]> external_buf);
+
+      void inspect_xtc(XtcData::Xtc *xtc,
+                       XtcData::TransitionId::Value transition_id);
+
+    protected:
       std::string m_smd_path;
       size_t m_events_per_read;
       size_t m_max_dgram_size;
@@ -138,18 +213,8 @@ namespace XTCPP
 
       char* dgrams_buf; ///< Data read into this buffer
 
-      void process_data(XtcData::Xtc *xtc,
-                        std::shared_ptr<XtcOffset[]> external_buf);
-
-      void process_data(XtcData::Xtc *xtc,
-                        XtcData::TransitionId::Value transition_id);
-      void process_data_internal(XtcData::Xtc *xtc,
-                                 XtcData::TransitionId::Value transition_id);
-
       char* m_buf;
       XtcData::NamesLookup m_names_lookup;
-
-      std::vector<XtcOffset> m_offsets;
 
       std::map<std::string,                   // detname
                std::map<std::string,          // alg_name
@@ -157,8 +222,6 @@ namespace XTCPP
                                  XtcData::NameIndex>>> m_alg_map;
 
       std::vector<unsigned> m_offset_in_xtc;
-
-      virtual void init_file(){}
 
       std::shared_ptr<spdlog::logger> m_logger;
     };

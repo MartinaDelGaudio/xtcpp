@@ -1,19 +1,22 @@
-#include "../common/smd_reader.hh"
 #include "smd_reader.hh"
+
+#include "common/smd_reader.hh"
 
 #include "xtcdata/xtc/DescData.hh"
 #include "xtcdata/xtc/NamesLookup.hh"
 #include "xtcdata/xtc/ShapesData.hh"
 
 #include "mpi.h"
+#include "spdlog/sinks/stdout_color_sinks.h"
+#include "spdlog/spdlog.h"
 
 #include <algorithm>
+#include <expected>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <string>
 
-using namespace XtcData;
 
 namespace XTCPP {
 
@@ -22,11 +25,16 @@ namespace XTCPP {
                          size_t max_dgram_size,
                          size_t events_per_read)
       : Base::SMDReader(smd_path, max_dgram_size, events_per_read)
+      , m_buf(new char[max_dgram_size])
       , m_file_buf0(new char[(sizeof(XtcData::Dgram) + 80) * events_per_read])
       , m_file_buf1(new char[(sizeof(XtcData::Dgram) + 80) * events_per_read])
-      , m_buf(new char[max_dgram_size])
     {
       init_file();
+      if (auto tmp = spdlog::get("MPI::SMDReader")) {
+        m_logger = tmp;
+      } else {
+        m_logger = spdlog::stdout_color_mt("MPI::SMDReader");
+      }
     }
 
     void SMDReader::init_file() {
@@ -46,7 +54,7 @@ namespace XTCPP {
       MPI_File_close(&m_fh);
     }
 
-    XtcData::Dgram* SMDReader::next() {
+    std::expected<void, SMDReadError> SMDReader::read() {
       XtcData::Dgram& dg = *reinterpret_cast<XtcData::Dgram*>(m_buf);
       MPI_Status status;
       MPI_Offset dgram_offset = m_file_offset;
@@ -57,13 +65,17 @@ namespace XTCPP {
                                 MPI_BYTE,
                                 &status);
       if (rc != MPI_SUCCESS) {
-        std::cout << "Unsuccessful header read" << std::endl;
-        return nullptr;
+        char error_buf[256];
+        int error_buf_len;
+        MPI_Error_string(status.MPI_ERROR, error_buf, &error_buf_len);
+        m_logger->error("*** [read] Unable to read dgram header: " +
+                        std::string(error_buf));
+        return std::unexpected(SMDReadError::DgramHeaderError);
       }
       int count;
       MPI_Get_count(&status, MPI_INT, &count);
       if (count == 0) {
-        return nullptr;
+        return std::unexpected(SMDReadError::ZeroBytesRead);
       }
       size_t payload_size = dg.xtc.sizeofPayload();
       rc = MPI_File_read_at(m_fh,
@@ -73,16 +85,19 @@ namespace XTCPP {
                             MPI_BYTE,
                             &status);
       if (rc != MPI_SUCCESS) {
-        std::cout << "Unsuccessful reading payload" << std::endl;
-        return nullptr;
+        char error_buf[256];
+        int error_buf_len;
+        MPI_Error_string(status.MPI_ERROR, error_buf, &error_buf_len);
+        m_logger->error("*** [read] Unable to read payload: " + std::string(error_buf));
+        return std::unexpected(SMDReadError::GeneralIOError);
       }
 
-      process_data(&dg.xtc, dg.service());
+      recurse_dgram_xtcs(&dg.xtc, dg.service());
       m_file_offset += sizeof(dg) + payload_size;
-      return &dg;
+      return {};
     }
 
-    void SMDReader::read() {
+    std::expected<void, SMDReadError> SMDReader::iread() {
       size_t read_size = (sizeof(XtcData::Dgram) + 80) * m_events_per_read;
 
       if (m_access_offset) {
@@ -99,32 +114,36 @@ namespace XTCPP {
                         read_size,
                         MPI_BYTE,
                         &m_read_req);
+      return {};
     }
 
-    char* SMDReader::wait() {
+    std::expected<void, SMDReadError> SMDReader::wait() {
       MPI_Status status;
       std::memset(&status, 0, sizeof(status));
       int rc = MPI_Wait(&m_read_req, &status);
 
       if (rc != MPI_SUCCESS) {
-        std::cout << "***^&^***Wait was unsuccessful: " << rc << std::endl;
+        char error_buf[256];
+        int error_buf_len;
+        MPI_Error_string(rc, error_buf, &error_buf_len);
+        m_logger->error("*** Wait was unsuccessful: " + std::string(error_buf));
       }
 
       if (status.MPI_ERROR != MPI_SUCCESS) {
-        char error_string[256];
-        int err_str_len;
-        MPI_Error_string(status.MPI_ERROR, error_string, &err_str_len);
-        std::cout << "  **** Status error: " << error_string << std::endl;
+        char error_buf[256];
+        int error_buf_len;
+        MPI_Error_string(status.MPI_ERROR, error_buf, &error_buf_len);
+        m_logger->error("*** Wait was unsuccessful: " + std::string(error_buf));
       }
 
       int count;
       MPI_Get_count(&status, MPI_INT, &count);
       if (count == 0) {
-        return nullptr;
+        return std::unexpected(SMDReadError::ZeroBytesRead);
       }
 
       if (count < 0) {
-        std::cout << " Count is negative??? " << count << std::endl;
+        m_logger->error("*** On waiting for iread, bytes read returned negative?");
       }
 
       m_file_offset += count;
@@ -137,7 +156,7 @@ namespace XTCPP {
       m_access_offset = 0;
       size_t rs = (sizeof(XtcData::Dgram)+80)*m_events_per_read;
       std::fill(m_read_ptr,m_read_ptr+rs,0);
-      return m_access_ptr;
+      return {};
     }
   } // namespace MPI
 } // namespace XTCPP

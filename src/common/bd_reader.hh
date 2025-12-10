@@ -10,6 +10,7 @@
 #include "mpi.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 
+#include <expected>
 #include <map>
 #include <memory>
 #include <string>
@@ -18,6 +19,14 @@
 #include <vector>
 
 namespace XTCPP {
+
+  enum class BDReadError {
+    UnimplementedBaseFunction,
+    ZeroBytesRead,
+    AllDgramOffsetsRead,
+    GeneralIOError
+  };
+
   // A tuple of segment number, algorithm, and data field within the algorithm
   using SegAlgData = std::tuple<unsigned, std::string, std::string>;
   namespace Base {
@@ -32,9 +41,12 @@ namespace XTCPP {
       virtual ~BDReader();
       /**
        * Get the next set of offsets via the managed SMDReader.
-       * @return The number of offsets read.
+       * @return num_offsets The number of offsets read. May return a BDReadError
+       *         if something goes wrong or no more offsets to read.
        */
-      virtual size_t get_next_offsets() = 0;
+      virtual std::expected<size_t, BDReadError> get_next_offsets() {
+        return std::unexpected(BDReadError::UnimplementedBaseFunction);
+      }
 
       /**
        * Retrieve the datagram at an offset index.
@@ -44,10 +56,13 @@ namespace XTCPP {
        *            read by the SMDReader class. The index is internally wrapped
        *            by the events_per_read that was passed at creation since only
        *            this number of offsets is held in memory at a time.
-       * @return dgram The pointer to the datagram. May be a nullptr if no more data,
-       *               not found, etc.
+       * @return dgram The pointer to the datagram. May return a BDReadError with
+       *         appropriate enumerator if data is not there etc.
        */
-      virtual XtcData::Dgram* get_dgram(size_t unwrapped_offset_idx) = 0;
+      virtual std::expected<XtcData::Dgram*, BDReadError>
+      get_dgram_at(size_t unwrapped_offset_idx) {
+        return std::unexpected(BDReadError::UnimplementedBaseFunction);
+      }
 
       /**
        * Close the XTC2 file (in whatever manner appropriate for the implementation).
@@ -58,7 +73,7 @@ namespace XTCPP {
       /**
        * Return the data associated with a specific "algorithm" and field name
        * for a detector and segment number.
-       * NOTE: The `get_dgram` function MUST be called before this one. That function
+       * NOTE: The `get_dgram_at` function MUST be called before this one. That function
        *       reads the data from the file, this one then selects the relevant portion
        *       from within it.
        *
@@ -96,7 +111,7 @@ namespace XTCPP {
       /**
        * A pointer to the offsets being used to read datagrams.
        */
-      std::shared_ptr<XtcOffset[]> offsets() const { return m_offsets; }
+      std::shared_ptr<BDXtcOffset[]> offsets() const { return m_offsets; }
 
     protected:
       size_t m_events_per_read; ///< Number of events/offsets to store in memory
@@ -104,7 +119,7 @@ namespace XTCPP {
       /**
        * The buffer used to hold `m_events_per_read` offsets in memory.
        */
-      std::shared_ptr<XtcOffset[]> m_offsets{nullptr};
+      std::shared_ptr<BDXtcOffset[]> m_offsets{nullptr};
 
       size_t m_num_events; ///< Current number of events/offsets read
       XtcData::Xtc* m_payload_ptr; ///< Pointer to the data requested by get_data
@@ -131,7 +146,7 @@ namespace XTCPP {
        * datagram. This assumes consistent size of data. This is valid for
        * some algorithms but not all.
        */
-      std::map<std::string, std::map<SegAlgData, XtcOffset>> m_offsets_in_dg;
+      std::map<std::string, std::map<SegAlgData, BDXtcOffset>> m_offsets_in_dg;
 
       /**
        * An iterative approach to pulling out the requested data if the offset

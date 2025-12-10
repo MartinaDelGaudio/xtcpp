@@ -27,17 +27,13 @@ namespace XTCPP {
       constexpr size_t max_dgram_size = 0x4000000;
       m_smd_reader = std::make_unique<SMDReader>(smd_path, max_dgram_size, events_per_read);
       if (auto tmp = spdlog::get("Base::BDReader")) {
-	m_logger = tmp;
+        m_logger = tmp;
       } else {
-	m_logger = spdlog::stdout_color_mt("Base::BDReader");
+        m_logger = spdlog::stdout_color_mt("Base::BDReader");
       }
     }
 
     BDReader::~BDReader() {}
-    size_t BDReader::get_next_offsets() { return 0; }
-    XtcData::Dgram* BDReader::get_dgram(size_t unwrapped_offset_idx) {
-      return nullptr;
-    }
 
     std::pair<void*, size_t> BDReader::get_data(const std::string& detname,
                                                  const unsigned& seg_no,
@@ -65,9 +61,9 @@ namespace XTCPP {
                                                         const std::string& data_name) {
       SegAlgData seg_alg_data = std::make_tuple(seg_no, alg, data_name);
 
-      XtcOffset offset_placeholder(0,0);
+      BDXtcOffset offset_placeholder(0,0);
 
-      std::map<SegAlgData, XtcOffset> placeholder;
+      std::map<SegAlgData, BDXtcOffset> placeholder;
       m_offsets_in_dg.try_emplace(detname, placeholder);
       auto& det_offset_map = m_offsets_in_dg[detname];
       det_offset_map.try_emplace(seg_alg_data, offset_placeholder);

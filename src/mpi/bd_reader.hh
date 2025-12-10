@@ -1,5 +1,5 @@
-#ifndef XTCPP_MPIREADER_HH
-#define XTCPP_MPIREADER_HH
+#ifndef XTCPP_MPI_BDREADER_HH
+#define XTCPP_MPI_BDREADER_HH
 
 #include "common/bd_reader.hh"
 
@@ -10,6 +10,7 @@
 #include "mpi.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 
+#include <expected>
 #include <map>
 #include <string>
 #include <utility>
@@ -29,8 +30,12 @@ namespace XTCPP {
       ~BDReader();
 
       int rank() const { return m_rank; }
-      size_t get_next_offsets() override;
-      XtcData::Dgram* get_dgram(size_t unwrapped_offset_idx) override;
+
+      virtual std::expected<size_t, BDReadError>
+      get_next_offsets() override;
+
+      virtual std::expected<XtcData::Dgram*, BDReadError>
+      get_dgram_at(size_t unwrapped_offset_idx) override;
 
       void close();
     private:
@@ -68,4 +73,4 @@ namespace XTCPP {
   } // namespace MPI
 } // namespace XTCPP
 
-#endif // XTCPP_MPIREADER_HH
+#endif // XTCPP_MPI_BDREADER_HH

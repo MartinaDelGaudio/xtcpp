@@ -9,6 +9,8 @@
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 
+#include <exception>
+#include <expected>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -28,9 +30,9 @@ namespace XTCPP {
       , m_dgram_buf1(new char[0x4000000])
     {
       if (auto tmp = spdlog::get("MPI::BDReader")) {
-	m_logger = tmp;
+        m_logger = tmp;
       } else {
-	m_logger = spdlog::stdout_color_mt("MPI::BDReader");
+        m_logger = spdlog::stdout_color_mt("MPI::BDReader");
       }
       init_reader();
     }
@@ -57,10 +59,10 @@ namespace XTCPP {
 
       size_t window_size{0};
       if (m_shmem_rank == 0) {
-        window_size = sizeof(XtcOffset)*m_events_per_read;
+        window_size = sizeof(BDXtcOffset)*m_events_per_read;
       }
       MPI_Win_allocate_shared(window_size,
-                              sizeof(XtcOffset),
+                              sizeof(BDXtcOffset),
                               MPI_INFO_NULL,
                               m_shmem_comm,
                               &m_offsets,
@@ -76,19 +78,25 @@ namespace XTCPP {
       }
 
       // We don't care about the dgram (configure) but the read populates the attributes
-      [[maybe_unused]] XtcData::Dgram* dg = m_smd_reader->next();
-      m_detnames = m_smd_reader->detnames();
-      m_segment_nos = m_smd_reader->segment_numbers();
-      m_serial_nos = m_smd_reader->serial_numbers();
-      m_det_types = m_smd_reader->det_types();
+      auto ret = m_smd_reader->read();
+      if (ret.has_value()) {
+        m_detnames = m_smd_reader->detnames();
+        m_segment_nos = m_smd_reader->segment_numbers();
+        m_serial_nos = m_smd_reader->serial_numbers();
+        m_det_types = m_smd_reader->det_types();
 
-      //commit_offset_type();
-      m_read_ptr = m_dgram_buf0;
-      m_access_ptr = m_dgram_buf1;
-      m_req_ptr = &m_dgram_req0;
+        m_read_ptr = m_dgram_buf0;
+        m_access_ptr = m_dgram_buf1;
+        m_req_ptr = &m_dgram_req0;
 
-      if (m_rank == 0) {
-        m_smd_reader->read();
+        if (m_rank == 0) {
+          auto iret = m_smd_reader->iread();
+          if (!iret.has_value()) {
+            /// Handle errors...
+          }
+        }
+      } else {
+        // Handle errors with ret.error() checks....
       }
     }
     void BDReader::close() { MPI_File_close(&m_fh); }
@@ -100,23 +108,29 @@ namespace XTCPP {
       delete[] m_dgram_buf1;
     }
 
-    size_t BDReader::get_next_offsets() {
+    std::expected<size_t, BDReadError> BDReader::get_next_offsets() {
       MPI_Win_lock_all(0, m_offset_win);
       if (m_shmem_rank == 0) {
         size_t n_events = 0;
-        m_smd_reader->wait();
-        while (n_events < m_events_per_read) {
-          XtcData::Dgram* dg = m_smd_reader->next(m_offsets);
-          if (!dg) {
-            break;
+        auto ret = m_smd_reader->wait();
+        if (ret.has_value()) {
+          while (n_events < m_events_per_read) {
+            XtcData::Dgram* dg = m_smd_reader->get_offset_into(m_offsets);
+            if (!dg) {
+              break;
+            }
+            if (dg->service() == XtcData::TransitionId::L1Accept) {
+              n_events++;
+            }
           }
-          if (dg->service() == XtcData::TransitionId::L1Accept) {
-            n_events++;
-          }
+          m_smd_reader->iread();
+          m_num_events = n_events;
+          m_logger->info("Read " + std::to_string(m_num_events) + " offsets");
+        } else if (ret.error() == SMDReadError::ZeroBytesRead) {
+          m_num_events = 0;
+        } else {
+          /// Handle errors...
         }
-        m_smd_reader->read();
-        m_num_events = n_events;
-	m_logger->info("Read " + std::to_string(m_num_events) + " offsets");
       }
       MPI_Win_sync(m_offset_win);
       MPI_Bcast(&m_num_events, 1, MPI_UNSIGNED_LONG_LONG, 0, m_shmem_comm);
@@ -124,12 +138,13 @@ namespace XTCPP {
       return m_num_events;
     }
 
-    XtcData::Dgram* BDReader::get_dgram(size_t unwrapped_offset_idx) {
+    std::expected<XtcData::Dgram*, BDReadError>
+    BDReader::get_dgram_at(size_t unwrapped_offset_idx) {
       size_t offset_idx = unwrapped_offset_idx % m_events_per_read;
       if (offset_idx >= m_num_events) {
-        return nullptr; // All data read.
+        return std::unexpected(BDReadError::AllDgramOffsetsRead);
       }
-      XtcOffset& offset = m_offsets[offset_idx];
+      BDXtcOffset& offset = m_offsets[offset_idx];
 
       XtcData::Dgram* dg = reinterpret_cast<XtcData::Dgram*>(m_dgram_buf);
       MPI_Status status;
@@ -145,10 +160,10 @@ namespace XTCPP {
       int count;
       MPI_Get_count(&status, MPI_INT, &count);
       if (count == 0) {
-        return nullptr;
+        return std::unexpected(BDReadError::ZeroBytesRead);
       }
       if (rc != MPI_SUCCESS) {
-        return nullptr;
+        return std::unexpected(BDReadError::GeneralIOError);
       }
       m_payload_ptr = reinterpret_cast<XtcData::Xtc*>(dg->xtc.payload());
       m_remaining_payload = dg->xtc.sizeofPayload();
