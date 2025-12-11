@@ -489,8 +489,20 @@ namespace XTCPP {
                         offset_idx);
       */
 
+      // Launch all read asynchronously
       for (auto& reader : m_xtc_readers) {
-        auto ret = reader->read_at(offset_idx);
+        auto ret = reader->iread_at(offset_idx);
+        if (ret.has_value()) {
+          continue;
+        } else {
+          // Handle errors?
+          return nullptr;
+        }
+      }
+
+      // Now wait on all of them
+      for (auto& reader : m_xtc_readers) {
+        auto ret = reader->wait();
         if (ret.has_value()) {
           //m_logger->trace("** Have a non-null dgram return. Now accessing the data field.");
           std::vector<unsigned> reader_seg_nos = reader->segment_numbers()[m_detname];

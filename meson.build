@@ -54,6 +54,15 @@ hdf5_dep = declare_dependency(
     ],
 )
 
+#### xtcdata subproject dependency ####
+#######################################
+
+#xtcdata_proj = subproject('xtcdata')
+#staticXtc_dep = xtcdata_proj.get_variable('staticXtc_dep')
+
+#### Kludge xtcdata dependency ####
+###################################
+
 staticXtc_dep = declare_dependency(
     include_directories: include_directories,
     link_args: [

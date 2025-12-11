@@ -72,11 +72,18 @@ namespace XTCPP {
                         std::string(error_buf));
         return std::unexpected(SMDReadError::DgramHeaderError);
       }
+
       int count;
-      MPI_Get_count(&status, MPI_INT, &count);
+      MPI_Get_count(&status, MPI_BYTE, &count);
       if (count == 0) {
         return std::unexpected(SMDReadError::ZeroBytesRead);
+      } else if (count == MPI_UNDEFINED) {
+        // This happens if count is not a multiple of the element type
+        // The element type is the one used for the read (MPI_BYTE)
+        m_logger->error("*** On read, read was not a multiple of MPI_BYTE");
+        return std::unexpected(SMDReadError::GeneralIOError);
       }
+
       size_t payload_size = dg.xtc.sizeofPayload();
       rc = MPI_File_read_at(m_fh,
                             dgram_offset + sizeof(dg),
@@ -89,6 +96,16 @@ namespace XTCPP {
         int error_buf_len;
         MPI_Error_string(status.MPI_ERROR, error_buf, &error_buf_len);
         m_logger->error("*** [read] Unable to read payload: " + std::string(error_buf));
+        return std::unexpected(SMDReadError::GeneralIOError);
+      }
+
+      MPI_Get_count(&status, MPI_BYTE, &count);
+      if (count == 0) {
+        return std::unexpected(SMDReadError::ZeroBytesRead);
+      } else if (count == MPI_UNDEFINED) {
+        // This happens if count is not a multiple of the element type
+        // The element type is the one used for the read (MPI_BYTE)
+        m_logger->error("*** On read, read was not a multiple of MPI_BYTE");
         return std::unexpected(SMDReadError::GeneralIOError);
       }
 
@@ -119,7 +136,7 @@ namespace XTCPP {
 
     std::expected<void, SMDReadError> SMDReader::wait() {
       MPI_Status status;
-      std::memset(&status, 0, sizeof(status));
+      std::memset(&status, 0, sizeof(MPI_Status));
       int rc = MPI_Wait(&m_read_req, &status);
 
       if (rc != MPI_SUCCESS) {
@@ -127,6 +144,7 @@ namespace XTCPP {
         int error_buf_len;
         MPI_Error_string(rc, error_buf, &error_buf_len);
         m_logger->error("*** Wait was unsuccessful: " + std::string(error_buf));
+        return std::unexpected(SMDReadError::GeneralIOError);
       }
 
       if (status.MPI_ERROR != MPI_SUCCESS) {
@@ -134,16 +152,18 @@ namespace XTCPP {
         int error_buf_len;
         MPI_Error_string(status.MPI_ERROR, error_buf, &error_buf_len);
         m_logger->error("*** Wait was unsuccessful: " + std::string(error_buf));
+        return std::unexpected(SMDReadError::GeneralIOError);
       }
 
       int count;
-      MPI_Get_count(&status, MPI_INT, &count);
+      MPI_Get_count(&status, MPI_BYTE, &count);
       if (count == 0) {
         return std::unexpected(SMDReadError::ZeroBytesRead);
-      }
-
-      if (count < 0) {
-        m_logger->error("*** On waiting for iread, bytes read returned negative?");
+      } else if (count == MPI_UNDEFINED) {
+        // This happens if count is not a multiple of the element type
+        // The element type is the one used for the read (MPI_BYTE)
+        m_logger->error("*** On wait for iread, read was not a multiple of MPI_BYTE");
+        return std::unexpected(SMDReadError::GeneralIOError);
       }
 
       m_file_offset += count;

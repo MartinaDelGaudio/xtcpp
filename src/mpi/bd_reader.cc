@@ -85,8 +85,7 @@ namespace XTCPP {
         m_det_types = m_smd_reader->det_types();
 
         m_read_ptr = m_dgram_buf0;
-        m_access_ptr = m_dgram_buf1;
-        m_req_ptr = &m_dgram_req0;
+        m_access_ptr = m_dgram_buf0;
 
         if (m_rank == 0) {
           auto iret = m_smd_reader->iread();
@@ -156,14 +155,92 @@ namespace XTCPP {
                                 dgram_size,
                                 MPI_BYTE,
                                 &status);
-      int count;
-      MPI_Get_count(&status, MPI_INT, &count);
-      if (count == 0) {
-        return std::unexpected(BDReadError::ZeroBytesRead);
-      }
+
       if (rc != MPI_SUCCESS) {
         return std::unexpected(BDReadError::GeneralIOError);
       }
+
+      int count;
+      MPI_Get_count(&status, MPI_BYTE, &count);
+      if (count == 0) {
+        return std::unexpected(BDReadError::ZeroBytesRead);
+      } else if (count == MPI_UNDEFINED) {
+        // This happens if count is not a multiple of the element type
+        // The element type is the one used for the read (MPI_BYTE)
+        m_logger->error("*** On read, read was not a multiple of MPI_BYTE");
+        return std::unexpected(BDReadError::GeneralIOError);
+      }
+
+      m_payload_ptr = reinterpret_cast<XtcData::Xtc*>(dg->xtc.payload());
+      m_remaining_payload = dg->xtc.sizeofPayload();
+      return {};
+    }
+
+
+    std::expected<void, BDReadError>
+    BDReader::iread_at(size_t unwrapped_offset_idx) {
+      size_t offset_idx = unwrapped_offset_idx % m_events_per_read;
+      if (offset_idx >= m_num_events) {
+        return std::unexpected(BDReadError::AllDgramOffsetsRead);
+      }
+      BDXtcOffset& offset = m_offsets[offset_idx];
+
+      XtcData::Dgram* dg = reinterpret_cast<XtcData::Dgram*>(m_read_ptr);
+
+      MPI_Offset file_offset = offset.offset;
+      size_t dgram_size = offset.size;
+
+      //std::memset(&m_dgram_req, 0, sizeof(MPIO_Request));
+      int rc = MPI_File_iread_at(m_fh,
+                                 file_offset,
+                                 dg,
+                                 dgram_size,
+                                 MPI_BYTE,
+                                 &m_dgram_req);
+      if (rc != MPI_SUCCESS) {
+        char error_buf[256];
+        int error_buf_len;
+        MPI_Error_string(rc, error_buf, &error_buf_len);
+        m_logger->error("*** iread was unsuccessful: " + std::string(error_buf));
+        return std::unexpected(BDReadError::GeneralIOError);
+      }
+
+      return {};
+    }
+
+    std::expected<void, BDReadError> BDReader::wait() {
+      MPI_Status status;
+      std::memset(&status, 0, sizeof(MPI_Status));
+      int rc = MPI_Wait(&m_dgram_req, &status);
+
+      if (rc != MPI_SUCCESS) {
+        char error_buf[256];
+        int error_buf_len;
+        MPI_Error_string(rc, error_buf, &error_buf_len);
+        m_logger->error("*** Wait was unsuccessful: " + std::string(error_buf));
+        return std::unexpected(BDReadError::GeneralIOError);
+      }
+
+      if (status.MPI_ERROR != MPI_SUCCESS) {
+        char error_buf[256];
+        int error_buf_len;
+        MPI_Error_string(status.MPI_ERROR, error_buf, &error_buf_len);
+        m_logger->error("*** Wait was unsuccessful: " + std::string(error_buf));
+        return std::unexpected(BDReadError::GeneralIOError);
+      }
+
+      int count;
+      MPI_Get_count(&status, MPI_BYTE, &count);
+      if (count == 0) {
+        return std::unexpected(BDReadError::ZeroBytesRead);
+      } else if (count == MPI_UNDEFINED) {
+        // This happens if count is not a multiple of the element type
+        // The element type is the one used for the read (MPI_BYTE)
+        m_logger->error("*** On wait for iread, read was not a multiple of MPI_BYTE");
+        return std::unexpected(BDReadError::GeneralIOError);
+      }
+
+      XtcData::Dgram* dg = reinterpret_cast<XtcData::Dgram*>(m_read_ptr);
       m_payload_ptr = reinterpret_cast<XtcData::Xtc*>(dg->xtc.payload());
       m_remaining_payload = dg->xtc.sizeofPayload();
       return {};

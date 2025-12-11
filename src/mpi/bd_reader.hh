@@ -37,6 +37,11 @@ namespace XTCPP {
       virtual std::expected<void, BDReadError>
       read_at(size_t unwrapped_offset_idx) override;
 
+      virtual std::expected<void, BDReadError>
+      iread_at(size_t unwrapped_offset_idx) override;
+
+      virtual std::expected<void, BDReadError> wait() override;
+
       virtual XtcData::Dgram* get_current_dgram() override {
         return reinterpret_cast<XtcData::Dgram *>(m_dgram_buf);
       }
@@ -63,8 +68,7 @@ namespace XTCPP {
       char* m_read_ptr;
       char* m_access_ptr;
 
-      MPIO_Request m_dgram_req0;
-      MPIO_Request* m_req_ptr;
+      MPIO_Request m_dgram_req;
 
       void init_reader() override;
 
