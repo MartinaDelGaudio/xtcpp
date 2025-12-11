@@ -4,9 +4,9 @@ project(
     version: '0.1.0',
     default_options: [
         'cpp_std=c++23',
-	'optimization=3',
+        'optimization=3',
         # Statically link subproject libraries by default as there are
-	# difficulties getting the wheels to work with shared libraries
+        # difficulties getting the wheels to work with shared libraries
         'default_library=static',
     ],
 )
@@ -22,7 +22,7 @@ py3_dep = py3.dependency()
 min_python_ver = '3.8'
 py_ver = py3.language_version()
 if py_ver.version_compare(f'<@min_python_ver@')
-  error(f'Minimum supported Python version is @min_python_ver@, found @py_ver@')
+    error(f'Minimum supported Python version is @min_python_ver@, found @py_ver@')
 endif
 
 pybind11_dep = dependency('pybind11', required: true)
@@ -30,14 +30,15 @@ pybind11_dep = dependency('pybind11', required: true)
 #mpi_dep = dependency('mpi', required: true)
 
 include_directories = include_directories(
-  '/sdf/group/lcls/ds/ana/sw/conda2/rel/lcls2_100925/install/include',
-  '/sdf/group/lcls/ds/ana/sw/conda2/inst/envs/ps_20241122/include',
+    '/sdf/group/lcls/ds/ana/sw/conda2/rel/lcls2_100925/install/include',
+    '/sdf/group/lcls/ds/ana/sw/conda2/inst/envs/ps_20241122/include',
 )
 
 # Specify library directories
 library_directories = [
-  '/sdf/group/lcls/ds/ana/sw/conda2/rel/lcls2_100925/install/lib',
-  '/sdf/group/lcls/ds/ana/sw/conda2/inst/envs/ps_20241122/lib'
+    '/sdf/group/lcls/ds/ana/sw/conda2/rel/lcls2_100925/install/lib',
+    '/sdf/group/lcls/ds/ana/sw/conda2/inst/envs/ps_20241122/lib',
+    'src',
 ]
 
 openmp_dep = dependency('openmp', required: true)
@@ -48,8 +49,8 @@ hdf5_dep = declare_dependency(
     include_directories: include_directories,
     link_args: [
         '-L/sdf/group/lcls/ds/ana/sw/conda2/inst/envs/ps_20241122/lib',
-	'-lhdf5_cpp',
-	'-lhdf5',
+        '-lhdf5_cpp',
+        '-lhdf5',
     ],
 )
 
@@ -57,8 +58,8 @@ staticXtc_dep = declare_dependency(
     include_directories: include_directories,
     link_args: [
         '-L/sdf/group/lcls/ds/ana/sw/conda2/inst/envs/ps_20241122/lib',
-	'-L/sdf/group/lcls/ds/ana/sw/conda2/rel/lcls2_100925/install/lib',
-	'-lstaticXtc',
+        '-L/sdf/group/lcls/ds/ana/sw/conda2/rel/lcls2_100925/install/lib',
+        '-lstaticXtc',
     ],
 )
 
@@ -91,14 +92,15 @@ libxtcpp_base = shared_library(
         'src/common/datasource.cc',
         'src/common/detector.cc',
         'src/common/bd_reader.cc',
-	'src/common/smd_reader.cc',
+        'src/common/smd_reader.cc',
+        'src/util/threadpool.cc',
     ],
     dependencies: [
-	spdlog_dep,
-	httplib_dep,
-	openmp_dep,
-	rapidjson_dep,
-	staticXtc_dep,
+        spdlog_dep,
+        httplib_dep,
+        openmp_dep,
+        rapidjson_dep,
+        staticXtc_dep,
     ],
     include_directories: include_directories,
     install: true,
@@ -113,18 +115,14 @@ xtcpp_base_dep = declare_dependency(
     ],
     dependencies: [
         httplib_dep,
-	spdlog_dep,
-	openmp_dep,
-	rapidjson_dep,
-	staticXtc_dep,
+        spdlog_dep,
+        openmp_dep,
+        rapidjson_dep,
+        staticXtc_dep,
     ],
     include_directories: include_directories(
         'src',
     ),
-#    link_args: [
-#        '-lssl',    # For the HTTP libraries
-#	'-lcrypto', # For the HTTP libraries
-#    ]
 )
 
 ## MPI Implementation
@@ -135,13 +133,14 @@ libxtcpp_mpi = shared_library(
         'src/mpi/datasource.cc',
         'src/mpi/detector.cc',
         'src/mpi/bd_reader.cc',
-	'src/mpi/smd_reader.cc',
+        'src/mpi/smd_reader.cc',
+        'src/util/threadpool.cc',
     ],
     dependencies: [
-	spdlog_dep,
-	httplib_dep,
-	xtcpp_base_dep,
-	staticXtc_dep,
+        spdlog_dep,
+        httplib_dep,
+        xtcpp_base_dep,
+        staticXtc_dep,
     ],
     install: true,
     install_dir: py3.get_install_dir(),
@@ -156,8 +155,8 @@ xtcpp_mpi_dep = declare_dependency(
     dependencies: [
         httplib_dep,
         xtcpp_base_dep,
-	rapidjson_dep,
-	staticXtc_dep,
+        rapidjson_dep,
+        staticXtc_dep,
     ],
     include_directories: include_directories(
         'src/mpi',
@@ -189,7 +188,7 @@ xtcpp_hdf5_dep = declare_dependency(
     dependencies: [
         spdlog_dep,
         hdf5_dep,
-	xtcpp_mpi_dep,
+        xtcpp_mpi_dep,
     ],
     include_directories: include_directories(
         'src/hdf5',
@@ -205,7 +204,7 @@ jungfrau_test_app = executable(
         'src/app/jungfrau_reader.cc',
     ],
     dependencies: [
-    	xtcpp_mpi_dep,
+        xtcpp_mpi_dep,
         xtcpp_hdf5_dep,
     ],
     include_directories: include_directories(
@@ -230,10 +229,10 @@ py_mod = py3.extension_module(
     dependencies : [
         hdf5_dep,
         pybind11_dep,
-	xtcpp_base_dep,
-	xtcpp_mpi_dep,
-	xtcpp_hdf5_dep,
-	spdlog_dep,
+        xtcpp_base_dep,
+        xtcpp_mpi_dep,
+        xtcpp_hdf5_dep,
+        spdlog_dep,
     ],
     # subdir: '_xtcpp',
     install_rpath: '$ORIGIN',

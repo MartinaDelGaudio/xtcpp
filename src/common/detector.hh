@@ -3,12 +3,15 @@
 
 #include "bd_reader.hh"
 
+#include "../util/threadpool.hh"
+
 #include "xtcdata/xtc/Dgram.hh"
 
 #include "spdlog/sinks/stdout_color_sinks.h"
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdfloat>
 #include <string>
@@ -127,7 +130,7 @@ namespace XTCPP {
        * function and reused event by event.
        */
       std::vector<std::float32_t>& calib_data_buf() { return m_calib_data; }
-      
+
     protected:
       CalibStruct* m_const_ptr{nullptr}; ///< Underlying memory for holding calib constants
 
@@ -215,6 +218,15 @@ namespace XTCPP {
       virtual void init_resources() {}
 
       std::shared_ptr<spdlog::logger> m_logger; ///< Logger
+
+    private:
+      std::optional<ThreadPool> m_thread_pool;
+      using GetDataFn = void* (Detector::*)(size_t,
+                                            const std::string&,
+                                            const std::string&);
+      GetDataFn get_data_impl;
+      void* get_data_threaded(size_t, const std::string&, const std::string&);
+      void* get_data_sequential(size_t, const std::string&, const std::string&);
     };
   } // namespace Base
 }

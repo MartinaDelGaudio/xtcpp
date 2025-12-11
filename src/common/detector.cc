@@ -8,10 +8,12 @@
 #include "spdlog/spdlog.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 //#include <mdspan>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <ostream>
 #include <stdfloat>
 #include <string>
@@ -126,6 +128,16 @@ namespace XTCPP {
         m_logger = spdlog::stdout_color_mt("Base::Detector");
       }
       get_detector_short_name();
+
+      const char* det_read_mode = std::getenv("XTCPP_DET_GETDATA");
+      if (det_read_mode && std::string(det_read_mode) == "THREADED") {
+        get_data_impl = &Detector::get_data_threaded;
+        // ThreadPool is not copyable/moveable - construct in place
+        m_thread_pool.emplace(m_xtc_readers.size());
+      } else {
+        get_data_impl = &Detector::get_data_sequential;
+        m_thread_pool = std::nullopt;
+      }
     }
 
     void Detector::load_all_calib_constants() {
@@ -423,6 +435,12 @@ namespace XTCPP {
     void* Detector::get_data(size_t offset_idx,
                              const std::string& alg,
                              const std::string& data_name) {
+      return (this->*get_data_impl)(offset_idx, alg, data_name);
+    }
+
+    void* Detector::get_data_threaded(size_t offset_idx,
+                                      const std::string& alg,
+                                      const std::string& data_name) {
       /*
         m_logger->trace("Getting data for algorithm {} and field {} at offset idx {}",
         alg,
@@ -450,8 +468,28 @@ namespace XTCPP {
 
       std::vector<std::shared_future<void>> read_futs;
       for (auto& reader : m_xtc_readers) {
-        read_futs.push_back(m_thread_pool.enqueue(read_func, reader));
-        /*
+        read_futs.push_back((*m_thread_pool).enqueue(read_func, reader));
+      }
+      // Just wait on all the futures - we don't really care if we get stuck
+      // on an early one while a later finished first. We have to wait for them
+      // all
+      for (auto it = read_futs.begin(); it != read_futs.end(); it++) {
+        it->wait();
+      }
+      return m_data_ptrs.data();
+    }
+
+    void* Detector::get_data_sequential(size_t offset_idx,
+                                        const std::string& alg,
+                                        const std::string& data_name) {
+      /*
+        m_logger->trace("Getting data for algorithm {} and field {} at offset idx {}",
+                        alg,
+                        data_name,
+                        offset_idx);
+      */
+
+      for (auto& reader : m_xtc_readers) {
         auto ret = reader->read_at(offset_idx);
         if (ret.has_value()) {
           //m_logger->trace("** Have a non-null dgram return. Now accessing the data field.");
@@ -473,13 +511,6 @@ namespace XTCPP {
           // Handle specific errors?
           return nullptr;
         }
-        */
-      }
-      // Just wait on all the futures - we don't really care if we get stuck
-      // on an early one while a later finished first. We have to wait for them
-      // all
-      for (auto it = read_futs.begin(); it != read_futs.end(); it++) {
-        it->wait();
       }
       return m_data_ptrs.data();
     }
