@@ -34,8 +34,12 @@ namespace XTCPP {
       virtual std::expected<size_t, BDReadError>
       get_next_offsets() override;
 
-      virtual std::expected<XtcData::Dgram*, BDReadError>
-      get_dgram_at(size_t unwrapped_offset_idx) override;
+      virtual std::expected<void, BDReadError>
+      read_at(size_t unwrapped_offset_idx) override;
+
+      virtual XtcData::Dgram* get_current_dgram() override {
+        return reinterpret_cast<XtcData::Dgram *>(m_dgram_buf);
+      }
 
       void close();
     private:
@@ -50,8 +54,6 @@ namespace XTCPP {
       int m_shmem_rank;
       int m_n_shmem_ranks;
 
-      MPI_Datatype m_smd_offset_type;
-
       MPI_Win m_offset_win;
 
       char* m_dgram_buf;
@@ -63,8 +65,6 @@ namespace XTCPP {
 
       MPIO_Request m_dgram_req0;
       MPIO_Request* m_req_ptr;
-
-      void* get_value(size_t idx, XtcData::Name& name, XtcData::DescData& descdata);
 
       void init_reader() override;
 

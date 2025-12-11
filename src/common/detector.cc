@@ -1,5 +1,6 @@
 #include "detector.hh"
 
+#include "bd_reader.hh"
 #include "xtcdata/xtc/Dgram.hh"
 
 #include "httplib.h"
@@ -33,28 +34,28 @@ namespace XTCPP {
       auto* raw_data = reinterpret_cast<std::uint16_t*>(data_ptrs[seg]);
 
       for (size_t panel_idx=0; panel_idx < PIX_PER_SEG; ++panel_idx) {
-	size_t idx = seg*PIX_PER_SEG + panel_idx;
+        size_t idx = seg*PIX_PER_SEG + panel_idx;
 
-	uint16_t raw_pixel = raw_data[panel_idx];
-	uint16_t data = raw_pixel & data_mask;
-	size_t gain_idx = raw_pixel >> 14; // Top two bits
-	if (gain_idx > 1) {
-	  if (gain_idx == 2) [[unlikely]] {
-	      /* This is 0b10 - a bad pixel, hopefully unlikely - what should happen? */
-	      continue;
-	    } else [[likely]] {
-	      gain_idx--; // Map gain_idx 3 (0b11 - low gain) to index 2
-	    }
-	}
-	size_t calib_idx = gain_idx * NPIX + idx;
+        uint16_t raw_pixel = raw_data[panel_idx];
+        uint16_t data = raw_pixel & data_mask;
+        size_t gain_idx = raw_pixel >> 14; // Top two bits
+        if (gain_idx > 1) {
+          if (gain_idx == 2) [[unlikely]] {
+            /* This is 0b10 - a bad pixel, hopefully unlikely - what should happen? */
+            continue;
+          } else [[likely]] {
+            gain_idx--; // Map gain_idx 3 (0b11 - low gain) to index 2
+          }
+        }
+        size_t calib_idx = gain_idx * NPIX + idx;
 
-	if (calib_idx >= calibconst.size()) {
-	  std::cerr << "Invalid calib_idx: " << calib_idx << ", size is: " << calibconst.size()
-		    << ", gain idx is: " << gain_idx << std::endl;
-	  continue;
-	}
-	calib_data[idx] =
-	  (data - calibconst[calib_idx].ped) * calibconst[calib_idx].gain;
+        if (calib_idx >= calibconst.size()) {
+          std::cerr << "Invalid calib_idx: " << calib_idx << ", size is: " << calibconst.size()
+                    << ", gain idx is: " << gain_idx << std::endl;
+          continue;
+        }
+        calib_data[idx] =
+          (data - calibconst[calib_idx].ped) * calibconst[calib_idx].gain;
       }
     }
   }
@@ -410,9 +411,9 @@ namespace XTCPP {
 
     XtcData::Dgram* Detector::operator()(size_t offset_idx) {
       auto& reader = m_xtc_readers[0];
-      auto ret = reader->get_dgram_at(offset_idx);
+      auto ret = reader->read_at(offset_idx);
       if (ret.has_value()) {
-        return ret.value();
+        return reader->get_current_dgram();
       } else {
         /// Handle errors?
         return nullptr;
@@ -428,33 +429,57 @@ namespace XTCPP {
         data_name,
         offset_idx);
       */
-      for (auto& reader : m_xtc_readers) {
-        auto ret = reader->get_dgram_at(offset_idx);
+
+      auto read_func = [&](std::shared_ptr<Base::BDReader> reader) -> void {
+        auto ret = reader->read_at(offset_idx);
         if (ret.has_value()) {
-          XtcData::Dgram* dg = ret.value();
-          if (dg) {
-            //m_logger->trace("** Have a non-null dgram return. Now accessing the data field.");
-            std::vector<unsigned> reader_seg_nos = reader->segment_numbers()[m_detname];
-            auto seg_no_it = reader_seg_nos.begin();
-            while (seg_no_it != reader_seg_nos.end()) {
-              auto [data_ptr, data_size] = reader->get_data(m_detname,
-                                                            *seg_no_it,
-                                                            alg,
-                                                            data_name);
+          std::vector<unsigned> reader_seg_nos =
+              reader->segment_numbers()[m_detname];
+          auto seg_no_it = reader_seg_nos.begin();
+          while (seg_no_it != reader_seg_nos.end()) {
+            auto [data_ptr, data_size] = reader->get_data(m_detname,
+                                                          *seg_no_it,
+                                                          alg,
+                                                          data_name);
+            m_data_ptrs[*seg_no_it] = data_ptr;
+            m_data_sizes[*seg_no_it] = data_size;
+            seg_no_it++;
+          }
+        }
+      };
 
-              m_data_ptrs[*seg_no_it] = data_ptr;
-              m_data_sizes[*seg_no_it] = data_size;
+      std::vector<std::shared_future<void>> read_futs;
+      for (auto& reader : m_xtc_readers) {
+        read_futs.push_back(m_thread_pool.enqueue(read_func, reader));
+        /*
+        auto ret = reader->read_at(offset_idx);
+        if (ret.has_value()) {
+          //m_logger->trace("** Have a non-null dgram return. Now accessing the data field.");
+          std::vector<unsigned> reader_seg_nos = reader->segment_numbers()[m_detname];
+          auto seg_no_it = reader_seg_nos.begin();
+          while (seg_no_it != reader_seg_nos.end()) {
+            auto [data_ptr, data_size] = reader->get_data(m_detname,
+                                                          *seg_no_it,
+                                                          alg,
+                                                          data_name);
 
-              //m_logger->trace("*** Filled in data for segment # {}", *seg_no_it);
-              seg_no_it++;
-            }
-          } else {
-            m_logger->debug("Returning null");
-            return nullptr;
+            m_data_ptrs[*seg_no_it] = data_ptr;
+            m_data_sizes[*seg_no_it] = data_size;
+
+            //m_logger->trace("*** Filled in data for segment # {}", *seg_no_it);
+            seg_no_it++;
           }
         } else {
+          // Handle specific errors?
           return nullptr;
         }
+        */
+      }
+      // Just wait on all the futures - we don't really care if we get stuck
+      // on an early one while a later finished first. We have to wait for them
+      // all
+      for (auto it = read_futs.begin(); it != read_futs.end(); it++) {
+        it->wait();
       }
       return m_data_ptrs.data();
     }

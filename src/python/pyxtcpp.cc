@@ -83,7 +83,7 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
 		    return self.get_data(evt, "raw", "raw");
 		})
     .def("calib", [](XTCPP::Base::Detector& self, size_t evt) {
-		    [[maybe_unused]]auto raw_data = self.get_data(evt, "raw", "raw");
+      [[maybe_unused]]auto raw_data = self.get_data(evt, "raw", "raw");
 		    std::vector<std::float32_t> calib_data =
 		      XTCPP::calibrate(self.data_ptrs(), self.calibconst_span());
 		    float* float_data = reinterpret_cast<float*>(calib_data.data());
@@ -104,16 +104,16 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
 		     std::vector<std::shared_ptr<XTCPP::Base::BDReader>> xtc_readers,
 		     std::string experiment,
 		     std::string run) {
-		    MPI_Comm comm = MPI_Comm_f2c(comm_f);
-		    ///*
-		    return new XTCPP::MPI::Detector(comm,
-						    detname,
-						    serial_no,
-						    segment_nos,
-						    xtc_readers,
-						    experiment,
-						    run);
-		  }))
+      MPI_Comm comm = MPI_Comm_f2c(comm_f);
+      ///*
+      return new XTCPP::MPI::Detector(comm,
+                                      detname,
+                                      serial_no,
+                                      segment_nos,
+                                      xtc_readers,
+                                      experiment,
+                                      run);
+    }))
     .def("raw", [](XTCPP::MPI::Detector& self, size_t evt) {
 		    return self.get_data(evt, "raw", "raw");
 		  })
@@ -126,8 +126,8 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
 		    // which is pre-allocated. Then once it is filled with new data
 		    // we will return it.
 		    XTCPP::calibrate(self.data_ptrs(),
-				     self.calibconst_span(),
-				     self.calib_data_buf());
+                         self.calibconst_span(),
+                         self.calib_data_buf());
 		    float* float_data = reinterpret_cast<float*>(self.calib_data_buf().data());
 		    size_t nsegs {32};
 		    size_t nrows {512};
@@ -141,27 +141,27 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
 		    return new XTCPP::MPI::HDF5Writer(MPI_COMM_WORLD, batch_size);
 		  }))
     .def("event", [](XTCPP::MPI::HDF5Writer& self,
-		     py::dict event_data,
-		     py::dict event_shape) {
-		    std::map<std::string, std::any> evt_data;
-		    std::map<std::string, std::vector<size_t>> evt_shape;
-		    for (auto& item : evt_data) {
-		      std::string dset_name = py::str(item.first);
-		      py::object val = std::any_cast<py::object>(item.second);
-		      if (py::isinstance<py::array>(val)) {
-			py::array arr = val.cast<py::array>();
-			py::buffer_info buf_info = arr.request();
-			std::vector<std::float32_t> vec(buf_info.size);
-			std::memcpy(vec.data(), buf_info.ptr, buf_info.size*sizeof(std::float32_t));
-			evt_data[dset_name] = std::move(vec);
-		      }
-		    }
-		    for (auto& item : evt_shape) {
-		      std::string dset_name = py::str(item.first);
-		      evt_shape[dset_name] = std::move(item.second);
-		    }
-		    self.event(evt_data, evt_shape);
-		  })
+                     py::dict event_data,
+                     py::dict event_shape) {
+      std::map<std::string, std::any> evt_data;
+      std::map<std::string, std::vector<size_t>> evt_shape;
+      for (auto& item : evt_data) {
+        std::string dset_name = py::str(item.first);
+        py::object val = std::any_cast<py::object>(item.second);
+        if (py::isinstance<py::array>(val)) {
+          py::array arr = val.cast<py::array>();
+          py::buffer_info buf_info = arr.request();
+          std::vector<std::float32_t> vec(buf_info.size);
+          std::memcpy(vec.data(), buf_info.ptr, buf_info.size*sizeof(std::float32_t));
+          evt_data[dset_name] = std::move(vec);
+        }
+      }
+      for (auto& item : evt_shape) {
+        std::string dset_name = py::str(item.first);
+        evt_shape[dset_name] = std::move(item.second);
+      }
+      self.event(evt_data, evt_shape);
+    })
     .def("save_summary", &XTCPP::MPI::HDF5Writer::save_summary)
     .def("rank", &XTCPP::MPI::HDF5Writer::rank)
     .def("mpi_size", &XTCPP::MPI::HDF5Writer::size)
@@ -173,14 +173,14 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
 		     std::string& smd_path,
 		     std::string& xtc_path,
 		     size_t events_per_read) {
-		    MPI_Comm comm = MPI_Comm_f2c(comm_f);
-		    return new XTCPP::MPI::BDReader(comm,
-						    smd_path,
-						    xtc_path,
-						    events_per_read);
-		  }))
+      MPI_Comm comm = MPI_Comm_f2c(comm_f);
+      return new XTCPP::MPI::BDReader(comm,
+                                      smd_path,
+                                      xtc_path,
+                                      events_per_read);
+    }))
     .def("get_next_offsets", &XTCPP::MPI::BDReader::get_next_offsets)
-    .def("get_dgram_at", &XTCPP::MPI::BDReader::get_dgram_at)
+    .def("read_at", &XTCPP::MPI::BDReader::read_at)
     .def("get_data", &XTCPP::MPI::BDReader::get_data)
     .def("detnames", &XTCPP::MPI::BDReader::detnames)
     .def("segments", &XTCPP::MPI::BDReader::segment_numbers)

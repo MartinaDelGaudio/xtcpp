@@ -9,7 +9,6 @@
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 
-#include <exception>
 #include <expected>
 #include <iostream>
 #include <memory>
@@ -138,8 +137,8 @@ namespace XTCPP {
       return m_num_events;
     }
 
-    std::expected<XtcData::Dgram*, BDReadError>
-    BDReader::get_dgram_at(size_t unwrapped_offset_idx) {
+    std::expected<void, BDReadError>
+    BDReader::read_at(size_t unwrapped_offset_idx) {
       size_t offset_idx = unwrapped_offset_idx % m_events_per_read;
       if (offset_idx >= m_num_events) {
         return std::unexpected(BDReadError::AllDgramOffsetsRead);
@@ -167,7 +166,7 @@ namespace XTCPP {
       }
       m_payload_ptr = reinterpret_cast<XtcData::Xtc*>(dg->xtc.payload());
       m_remaining_payload = dg->xtc.sizeofPayload();
-      return dg;
+      return {};
     }
   } // namespace MPI
 } // namespace XTCPP

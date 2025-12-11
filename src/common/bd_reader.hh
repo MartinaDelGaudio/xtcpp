@@ -38,16 +38,10 @@ namespace XTCPP {
     class BDReader {
     public:
       BDReader(std::string& smd_path, std::string& xtc_path, size_t events_per_read);
-      virtual ~BDReader();
-      /**
-       * Get the next set of offsets via the managed SMDReader.
-       * @return num_offsets The number of offsets read. May return a BDReadError
-       *         if something goes wrong or no more offsets to read.
-       */
-      virtual std::expected<size_t, BDReadError> get_next_offsets() {
-        return std::unexpected(BDReadError::UnimplementedBaseFunction);
-      }
 
+      virtual ~BDReader();
+
+      /* Synchronous API */
       /**
        * Retrieve the datagram at an offset index.
        * @param[in] offset_idx The index of the offset to use. I.e. offset index 400
@@ -59,21 +53,48 @@ namespace XTCPP {
        * @return dgram The pointer to the datagram. May return a BDReadError with
        *         appropriate enumerator if data is not there etc.
        */
-      virtual std::expected<XtcData::Dgram*, BDReadError>
-      get_dgram_at(size_t unwrapped_offset_idx) {
+      virtual std::expected<void, BDReadError>
+      read_at(size_t unwrapped_offset_idx) {
+        return std::unexpected(BDReadError::UnimplementedBaseFunction);
+      }
+
+      /* Asynchronous API */
+      /**
+       * Trigger an asynchronous read of the datagram at the specified offset index.
+       * @param[in] offset_idx The index of the offset to use. I.e. offset index 400
+       *            corresponds to the 401st event. The concrete implementations must
+       *            provide the mechanism to turn these indices into the actual offset
+       *            read by the SMDReader class. The index is internally wrapped by
+       *            the events_per_read that was passed at creation since only
+       *            this number of offsets is held in memory at a time.
+       * @return dgram The pointer to the datagram. May return a BDReadError with
+       *         appropriate enumerator if data is not there etc.
+       */
+      virtual std::expected<void, BDReadError>
+      iread_at(size_t unwrapped_offset_idx) {
+        return std::unexpected(BDReadError::UnimplementedBaseFunction);
+      }
+
+      virtual std::expected<void, BDReadError> wait() {
+        return std::unexpected(BDReadError::UnimplementedBaseFunction);
+      }
+
+      /* Data access */
+      virtual XtcData::Dgram* get_current_dgram() { return nullptr; }
+
+      /**
+       * Get the next set of offsets via the managed SMDReader.
+       * @return num_offsets The number of offsets read. May return a
+       * BDReadError if something goes wrong or no more offsets to read.
+       */
+      virtual std::expected<size_t, BDReadError> get_next_offsets() {
         return std::unexpected(BDReadError::UnimplementedBaseFunction);
       }
 
       /**
-       * Close the XTC2 file (in whatever manner appropriate for the implementation).
-       * Also cleanup any additional resources.
-       */
-      virtual void close();
-
-      /**
        * Return the data associated with a specific "algorithm" and field name
        * for a detector and segment number.
-       * NOTE: The `get_dgram_at` function MUST be called before this one. That function
+       * NOTE: The `read_at` function MUST be called before this one. That function
        *       reads the data from the file, this one then selects the relevant portion
        *       from within it.
        *
@@ -90,9 +111,16 @@ namespace XTCPP {
                                                 const std::string& data_name);
 
       /**
+       * Close the XTC2 file (in whatever manner appropriate for the
+       * implementation). Also cleanup any additional resources.
+       */
+      virtual void close();
+
+      /**
        * The set of detector names in the XTC2 file managed by this reader.
        */
       std::vector<std::string> detnames() const { return m_detnames; }
+
       /**
        * The map of detector names to segment numbers for the data in this XTC2 file.
        */
@@ -112,6 +140,26 @@ namespace XTCPP {
        * A pointer to the offsets being used to read datagrams.
        */
       std::shared_ptr<BDXtcOffset[]> offsets() const { return m_offsets; }
+
+    protected:
+      /**
+       * An iterative approach to pulling out the requested data if the offset
+       * is not stored in `m_offsets_in_dg` or it is not reliable to use it.
+       */
+      std::pair<void *, size_t> get_data_internal(const std::string &detname,
+                                                  const unsigned &seg_no,
+                                                  const std::string &alg,
+                                                  const std::string &data_name);
+
+      /**
+       * Extract a value from an XTC by looking at the type/rank/size
+       * information in all the auxiliary XTCs etc. See the xtcdata package for
+       * more examples of this.
+       */
+      void *get_value(size_t idx, XtcData::Name &name,
+                      XtcData::DescData &descdata);
+
+      virtual void init_reader(){}; ///< Initialize the BDReader
 
     protected:
       size_t m_events_per_read; ///< Number of events/offsets to store in memory
@@ -148,23 +196,6 @@ namespace XTCPP {
        */
       std::map<std::string, std::map<SegAlgData, BDXtcOffset>> m_offsets_in_dg;
 
-      /**
-       * An iterative approach to pulling out the requested data if the offset
-       * is not stored in `m_offsets_in_dg` or it is not reliable to use it.
-       */
-      std::pair<void*, size_t> get_data_internal(const std::string& detname,
-                                                 const unsigned& seg_no,
-                                                 const std::string& alg,
-                                                 const std::string& data_name);
-
-      /**
-       * Extract a value from an XTC by looking at the type/rank/size information
-       * in all the auxiliary XTCs etc. See the xtcdata package for more examples
-       * of this.
-       */
-      void* get_value(size_t idx, XtcData::Name& name, XtcData::DescData& descdata);
-
-      virtual void init_reader() {}; ///< Initialize the BDReader
       std::string m_smd_path; ///< Path to the .smd.xtc2 file
       std::string m_xtc_path; ///< Path to the .xtc2 file
 
