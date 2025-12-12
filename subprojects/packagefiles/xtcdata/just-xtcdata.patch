@@ -1,0 +1,187 @@
+diff --git a/meson.build b/meson.build
+new file mode 100644
+index 000000000..47a71e723
+--- /dev/null
++++ b/meson.build
+@@ -0,0 +1,12 @@
++project(
++    'xtcdata',
++    'cpp',
++    version: '4.2.1',
++    default_options: ['cpp_std=c++23']
++)
++py = import('python').find_installation(pure: false)
++
++libdir_install_rpath = join_paths(get_option('prefix'), get_option('libdir'))
++
++inc = include_directories('xtcdata')
++subdir('xtcdata/xtcdata')
+diff --git a/xtcdata/xtcdata/app/meson.build b/xtcdata/xtcdata/app/meson.build
+new file mode 100644
+index 000000000..e3c7ef6dc
+--- /dev/null
++++ b/xtcdata/xtcdata/app/meson.build
+@@ -0,0 +1,82 @@
++app_incdir = inc
++
++executable(
++    'xtcreader',
++    'xtcreader.cc',
++    install: true,
++    install_rpath: libdir_install_rpath,
++    link_with: xtc_shlib,
++    include_directories: app_incdir,
++)
++
++executable(
++    'randomaccess',
++    'randomaccess.cc',
++    install: true,
++    install_rpath: libdir_install_rpath,
++    link_with: xtc_shlib,
++    include_directories: app_incdir,
++)
++
++executable(
++    'jungfrau',
++    'jungfrau.cc',
++    install: true,
++    install_rpath: libdir_install_rpath,
++    link_with: xtc_shlib,
++    include_directories: app_incdir,
++)
++
++executable(
++    'xtcwriter',
++    'xtcwriter.cc',
++    install: true,
++    install_rpath: libdir_install_rpath,
++    link_with: xtc_shlib,
++    include_directories: app_incdir,
++)
++
++executable(
++    'amiwriter',
++    'amiwriter.cc',
++    install: true,
++    install_rpath: libdir_install_rpath,
++    link_with: xtc_shlib,
++    include_directories: app_incdir,
++)
++
++executable(
++    'xtcsave',
++    'xtcsave.cc',
++    install: true,
++    install_rpath: libdir_install_rpath,
++    link_with: xtc_shlib,
++    include_directories: app_incdir,
++)
++
++executable(
++    'hsdduplicate',
++    'hsdduplicate.cc',
++    install: true,
++    install_rpath: libdir_install_rpath,
++    link_with: xtc_shlib,
++    include_directories: app_incdir,
++)
++
++executable(
++    'smdwriter',
++    'smdwriter.cc',
++    install: true,
++    install_rpath: libdir_install_rpath,
++    link_with: xtc_shlib,
++    include_directories: app_incdir,
++)
++
++executable(
++    'xtcupdate',
++    'xtcupdate.cc',
++    install: true,
++    install_rpath: libdir_install_rpath,
++    link_with: xtc_shlib,
++    include_directories: app_incdir,
++)
+diff --git a/xtcdata/xtcdata/meson.build b/xtcdata/xtcdata/meson.build
+new file mode 100644
+index 000000000..935bd09a3
+--- /dev/null
++++ b/xtcdata/xtcdata/meson.build
+@@ -0,0 +1,2 @@
++subdir('xtc')
++subdir('app')
+diff --git a/xtcdata/xtcdata/xtc/meson.build b/xtcdata/xtcdata/xtc/meson.build
+new file mode 100644
+index 000000000..4f61251f4
+--- /dev/null
++++ b/xtcdata/xtcdata/xtc/meson.build
+@@ -0,0 +1,67 @@
++xtc_sources = files(
++    'src/ConfigIter.cc',
++    'src/DataIter.cc',
++    'src/Level.cc',
++    'src/NamesIter.cc',
++    'src/ShapesData.cc',
++    'src/Smd.cc',
++    'src/TimeStamp.cc',
++    'src/TransitionId.cc',
++    'src/TypeId.cc',
++    'src/XtcFileIterator.cc',
++    'src/XtcIterator.cc',
++    'src/XtcUpdateIter.cc'
++)
++
++xtc_headers = files(
++    'Level.hh',
++    'NamesId.hh',
++    'NamesLookup.hh',
++    'NameIndex.hh',
++    'ShapesData.hh',
++    'BlockDgram.hh',
++    'Array.hh',
++    'XtcFileIterator.hh',
++    'Damage.hh',
++    'NamesIter.hh',
++    'ConfigIter.hh',
++    'DataIter.hh',
++    'Src.hh',
++    'Xtc.hh',
++    'DescData.hh',
++    'TimeStamp.hh',
++    'XtcIterator.hh',
++    'TransitionId.hh',
++    'Dgram.hh',
++    'TypeId.hh',
++    'VarDef.hh',
++    'Smd.hh',
++    'XtcUpdateIter.hh'
++)
++
++xtc_shlib = shared_library(
++    'xtc',
++    xtc_sources,
++    include_directories: inc,
++    install: true,
++    install_rpath: libdir_install_rpath
++)
++
++libstaticXtc = static_library(
++    'staticXtc',
++    xtc_sources,
++    include_directories: inc,
++    install: true,
++)
++
++install_headers(
++    xtc_headers,
++    install_dir: 'include/xtcdata/xtc',
++)
++
++staticXtc_dep = declare_dependency(
++    link_with: [
++        libstaticXtc
++    ],
++    include_directories: inc
++)

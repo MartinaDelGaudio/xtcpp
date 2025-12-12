@@ -57,21 +57,8 @@ hdf5_dep = declare_dependency(
 #### xtcdata subproject dependency ####
 #######################################
 
-#xtcdata_proj = subproject('xtcdata')
-#staticXtc_dep = xtcdata_proj.get_variable('staticXtc_dep')
-
-#### Kludge xtcdata dependency ####
-###################################
-
-staticXtc_dep = declare_dependency(
-    include_directories: include_directories,
-    link_args: [
-        '-L/sdf/group/lcls/ds/ana/sw/conda2/inst/envs/ps_20241122/lib',
-        '-L/sdf/group/lcls/ds/ana/sw/conda2/rel/lcls2_100925/install/lib',
-        '-lstaticXtc',
-    ],
-)
-
+xtcdata_proj = subproject('xtcdata')
+staticXtc_dep = xtcdata_proj.get_variable('staticXtc_dep')
 
 #### cpp-httplib subproject dependency ####
 ###########################################
