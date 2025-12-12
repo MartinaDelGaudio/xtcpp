@@ -33,9 +33,9 @@ namespace XTCPP {
       }
       spdlog::cfg::load_env_levels("XTCPP_LOG_LEVEL");
       if (auto tmp = spdlog::get("Base::DataSource")) {
-	m_logger = tmp;
+        m_logger = tmp;
       } else {
-	m_logger = spdlog::stdout_color_mt("Base::DataSource");
+        m_logger = spdlog::stdout_color_mt("Base::DataSource");
       }
     }
 

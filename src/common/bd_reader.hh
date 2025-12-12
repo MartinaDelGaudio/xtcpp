@@ -10,6 +10,7 @@
 #include "mpi.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 
+#include <any>
 #include <expected>
 #include <map>
 #include <memory>
@@ -54,7 +55,12 @@ namespace XTCPP {
        *         appropriate enumerator if data is not there etc.
        */
       virtual std::expected<void, BDReadError>
-      read_at(size_t unwrapped_offset_idx) {
+      read_l1_at(size_t unwrapped_offset_idx) {
+        return std::unexpected(BDReadError::UnimplementedBaseFunction);
+      }
+
+      virtual std::expected<void, BDReadError>
+      read_slowupdate_at(size_t unwrapped_offset_idx) {
         return std::unexpected(BDReadError::UnimplementedBaseFunction);
       }
 
@@ -71,7 +77,7 @@ namespace XTCPP {
        *         appropriate enumerator if data is not there etc.
        */
       virtual std::expected<void, BDReadError>
-      iread_at(size_t unwrapped_offset_idx) {
+      iread_l1_at(size_t unwrapped_offset_idx) {
         return std::unexpected(BDReadError::UnimplementedBaseFunction);
       }
 
@@ -94,7 +100,7 @@ namespace XTCPP {
       /**
        * Return the data associated with a specific "algorithm" and field name
        * for a detector and segment number.
-       * NOTE: The `read_at` function MUST be called before this one. That function
+       * NOTE: The `read_l1_at` function MUST be called before this one. That function
        *       reads the data from the file, this one then selects the relevant portion
        *       from within it.
        *
@@ -141,23 +147,29 @@ namespace XTCPP {
        */
       std::shared_ptr<BDXtcOffset[]> offsets() const { return m_offsets; }
 
+      /**
+       * The set of EPICS detector names (if any) in the file managed by this
+       * reader.
+       */
+      std::vector<std::string> epics_detnames() const { return m_epics_detnames; }
+
     protected:
       /**
        * An iterative approach to pulling out the requested data if the offset
        * is not stored in `m_offsets_in_dg` or it is not reliable to use it.
        */
-      std::pair<void *, size_t> get_data_internal(const std::string &detname,
-                                                  const unsigned &seg_no,
-                                                  const std::string &alg,
-                                                  const std::string &data_name);
+      std::pair<void*, size_t> get_data_internal(const std::string& detname,
+                                                 const unsigned& seg_no,
+                                                 const std::string& alg,
+                                                 const std::string& data_name);
 
       /**
        * Extract a value from an XTC by looking at the type/rank/size
        * information in all the auxiliary XTCs etc. See the xtcdata package for
        * more examples of this.
        */
-      void *get_value(size_t idx, XtcData::Name &name,
-                      XtcData::DescData &descdata);
+      std::any get_value(size_t idx, XtcData::Name &name,
+                         XtcData::DescData &descdata);
 
       virtual void init_reader(){}; ///< Initialize the BDReader
 
@@ -168,6 +180,18 @@ namespace XTCPP {
        * The buffer used to hold `m_events_per_read` offsets in memory.
        */
       std::shared_ptr<BDXtcOffset[]> m_offsets{nullptr};
+
+      /**
+       * A shared buffer for holding indices for slow updates.
+       * This index always points to the L1Accept index that immediately preceeds
+       * a SlowUpdate. E.g. if the index is 42, that means that after the L1Accept
+       * at offset index 42, there is a SlowUpdate (before you get to L1Accept at
+       * the offset index of 43.). This array is signed, because a value of -1
+       * indicates that before the first L1Accept, there is a SlowUpdate.
+       */
+      std::shared_ptr<ssize_t[]> m_slow_update_indices {nullptr};
+      size_t m_curr_slow_update_index{0};
+      size_t m_num_slow_updates;
 
       size_t m_num_events; ///< Current number of events/offsets read
       XtcData::Xtc* m_payload_ptr; ///< Pointer to the data requested by get_data
@@ -195,6 +219,8 @@ namespace XTCPP {
        * some algorithms but not all.
        */
       std::map<std::string, std::map<SegAlgData, BDXtcOffset>> m_offsets_in_dg;
+
+      std::vector<std::string> m_epics_detnames;
 
       std::string m_smd_path; ///< Path to the .smd.xtc2 file
       std::string m_xtc_path; ///< Path to the .xtc2 file

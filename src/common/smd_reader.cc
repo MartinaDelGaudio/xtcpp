@@ -50,6 +50,11 @@ namespace XTCPP {
             detname != "triginfo") {
           unsigned seg_no = names.segment();
           std::string ser_no = names.detId();
+          if (detname == "epics") {
+            for (size_t i=0; i<names.num(); ++i) {
+              m_epics_detnames.emplace_back(names.get(i).name());
+            }
+          }
           if (std::find(m_detnames.begin(), m_detnames.end(), detname) == m_detnames.end()) {
             m_detnames.push_back(detname);
             m_det_types[detname] = dettype;
@@ -125,7 +130,8 @@ namespace XTCPP {
       }
     }
 
-    XtcData::Dgram* SMDReader::get_offset_into(std::shared_ptr<BDXtcOffset[]> external_buf) {
+    XtcData::Dgram* SMDReader::get_offset_into(std::shared_ptr<BDXtcOffset[]> external_buf,
+                                               std::shared_ptr<ssize_t[]> slow_update_idx_buf) {
       XtcData::Dgram& dg = *reinterpret_cast<XtcData::Dgram*>(m_access_ptr + m_access_offset);
       size_t payload_size = dg.xtc.sizeofPayload();
       if (payload_size > static_cast<size_t>(m_file_size)) {
@@ -134,6 +140,11 @@ namespace XTCPP {
 
       if (dg.service() == XtcData::TransitionId::L1Accept) {
         extract_offset_from_dgram_into(&dg.xtc, external_buf);
+      } else if (dg.service() == XtcData::TransitionId::SlowUpdate) {
+        m_curr_slow_update_idx = m_curr_slow_update_idx % m_events_per_read;
+        slow_update_idx_buf[m_curr_slow_update_idx] =
+            static_cast<ssize_t>(m_curr_offset_idx) - 1;
+        m_curr_slow_update_idx++;
       }
       m_access_offset += sizeof(dg) + payload_size;
       return &dg;

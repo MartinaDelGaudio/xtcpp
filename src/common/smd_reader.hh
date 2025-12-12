@@ -114,11 +114,14 @@ namespace XTCPP
        *       this is because it uses a nullptr as a return value to indicate
        *       an error, or that there is no further offset to construct.
        *
-       * @param[in] external_buf An external buffer that the BDXtcOffset objects
+       * @param[in] offset_buf An external buffer that the BDXtcOffset objects
        *            will be constructed into.
+       * @param[in] slow_update_idx_buf An external buffer that the SlowUpdate
+       *            indices will be added into.
        * @return dgram The pointer to the next datagram.
        */
-      XtcData::Dgram* get_offset_into(std::shared_ptr<BDXtcOffset[]> external_buf);
+      XtcData::Dgram* get_offset_into(std::shared_ptr<BDXtcOffset[]> offset_buf,
+                                      std::shared_ptr<ssize_t[]> slow_update_idx_buf);
 
       /**
        * Construct the offset instance and return it.
@@ -130,15 +133,6 @@ namespace XTCPP
        * @return offset The offset constructed from the current datagram.
        */
       std::expected<BDXtcOffset, SMDReadError> get_offset();
-
-      /**
-       * Return the pointer to the next Dgram AND construct offsets into memory.
-       * @param[in] external_buf An external buffer that the BDXtcOffset objects will
-       *            be constructed into while the SMDReader is iterating through the
-       *            .smd.xtc2 file.
-       * @return dgram The pointer to the next datagram.
-       */
-      XtcData::Dgram* next(std::shared_ptr<BDXtcOffset[]> external_buf);
 
       /* Getters etc - get general information */
       /**
@@ -174,6 +168,11 @@ namespace XTCPP
       const AlgDataNameIndex&
       alg_map() const { return m_alg_map; }
 
+      /**
+       * The set of EPICS detector names (if any) in the file managed by this reader.
+       */
+      std::vector<std::string> epics_detnames() const { return m_epics_detnames; }
+
     protected:
       virtual void init_file() {}
 
@@ -191,6 +190,7 @@ namespace XTCPP
       size_t m_events_per_read;
       size_t m_max_dgram_size;
       size_t m_curr_offset_idx{0};
+      size_t m_curr_slow_update_idx{0};
       size_t m_file_offset{0};
 
       char* m_access_ptr;
@@ -201,6 +201,8 @@ namespace XTCPP
       std::map<std::string, std::vector<unsigned>> m_segment_nos;
       std::map<std::string, std::vector<std::string>> m_serial_nos;
       std::map<std::string, std::string> m_det_types;
+
+      std::vector<std::string> m_epics_detnames;
 
       /**
        * Describes how many bytes into the dgram.payload the offset information is.

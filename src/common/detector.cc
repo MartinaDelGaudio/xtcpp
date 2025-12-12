@@ -110,7 +110,8 @@ namespace XTCPP {
                        std::vector<unsigned> segment_nos,
                        std::vector<std::shared_ptr<BDReader>> xtc_readers,
                        std::string experiment,
-                       std::string run)
+                       std::string run,
+                       bool is_epics)
       : m_detname(detname)
       , m_serial_no(serial_no)
       , m_det_type(xtc_readers[0]->det_types()[m_detname])
@@ -121,6 +122,7 @@ namespace XTCPP {
       , m_data_ptrs(m_segment_nos.size())
       , m_data_sizes(m_segment_nos.size())
       , m_calib_data(32*512*1024)
+      , m_is_epics(is_epics)
     {
       if (auto tmp = spdlog::get("Base::Detector")) {
         m_logger = tmp;
@@ -423,7 +425,7 @@ namespace XTCPP {
 
     XtcData::Dgram* Detector::operator()(size_t offset_idx) {
       auto& reader = m_xtc_readers[0];
-      auto ret = reader->read_at(offset_idx);
+      auto ret = reader->read_l1_at(offset_idx);
       if (ret.has_value()) {
         return reader->get_current_dgram();
       } else {
@@ -449,7 +451,7 @@ namespace XTCPP {
       */
 
       auto read_func = [&](std::shared_ptr<Base::BDReader> reader) -> void {
-        auto ret = reader->read_at(offset_idx);
+        auto ret = reader->read_l1_at(offset_idx);
         if (ret.has_value()) {
           std::vector<unsigned> reader_seg_nos =
               reader->segment_numbers()[m_detname];
@@ -488,16 +490,45 @@ namespace XTCPP {
                         data_name,
                         offset_idx);
       */
-
       // Launch all read asynchronously
       for (auto& reader : m_xtc_readers) {
-        auto ret = reader->iread_at(offset_idx);
+        std::expected<void, BDReadError> ret;
+        if (m_is_epics) {
+          ret = reader->read_slowupdate_at(offset_idx);
+          if (ret.has_value()) {
+            // m_logger->trace("** Have a non-null dgram return. Now accessing
+            // the data field.");
+            std::vector<unsigned> reader_seg_nos =
+                reader->segment_numbers()[m_detname];
+            auto seg_no_it = reader_seg_nos.begin();
+            while (seg_no_it != reader_seg_nos.end()) {
+              auto [data_ptr, data_size] =
+                  reader->get_data(m_detname, *seg_no_it, alg, data_name);
+
+              m_data_ptrs[*seg_no_it] = data_ptr;
+              m_data_sizes[*seg_no_it] = data_size;
+
+              // m_logger->trace("*** Filled in data for segment # {}",
+              // *seg_no_it);
+              seg_no_it++;
+            }
+          } else {
+            return nullptr;
+          }
+        } else {
+          ret = reader->iread_l1_at(offset_idx);
+        }
+        //auto ret = reader->iread_l1_at(offset_idx);
         if (ret.has_value()) {
           continue;
         } else {
           // Handle errors?
           return nullptr;
         }
+      }
+
+      if (m_is_epics) {
+        return m_data_ptrs.data();
       }
 
       // Now wait on all of them

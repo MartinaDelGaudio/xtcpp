@@ -9,6 +9,7 @@
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 
+#include <any>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -76,21 +77,35 @@ namespace XTCPP {
         try {
           XtcData::DescData descdata(shapesdata, alg_map[detname][alg][seg_no]);
           XtcData::Names& names = descdata.nameindex().names();
+          if (names.segment() != seg_no) {
+            m_remaining_payload -= m_payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
+            m_payload_ptr = m_payload_ptr->next();
+            continue;
+          }
           for (size_t i = 0; i < names.num(); i++) {
             XtcData::Name& name = names.get(i);
             if (name.name() != data_name) {
               continue;
             }
             size_t data_size = static_cast<size_t>(m_payload_ptr->sizeofPayload());
-            m_remaining_payload -= m_payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
-            m_payload_ptr = m_payload_ptr->next();
+            //m_remaining_payload -= m_payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
+            //m_payload_ptr = m_payload_ptr->next();
 
-            void* data = get_value(i, name, descdata);
+            std::any val = get_value(i, name, descdata);
+            if (auto data = std::any_cast<void*>(val)) {
+              //void* data = get_value(i, name, descdata);
 
-            size_t diff = reinterpret_cast<char*>(data) - starting_ptr;
-            seg_alg_data_offset.offset = diff;
-            seg_alg_data_offset.size = data_size;
-            return std::make_pair(data, data_size);
+              size_t diff = reinterpret_cast<char*>(data) - starting_ptr;
+              seg_alg_data_offset.offset = diff;
+              seg_alg_data_offset.size = data_size;
+              return std::make_pair(data, data_size);
+            } else {
+              void* data_ptr = reinterpret_cast<void*>(reinterpret_cast<char*>(starting_ptr) + 56);
+              size_t diff = 56;
+              seg_alg_data_offset.offset = diff;
+              seg_alg_data_offset.size = data_size;
+              return std::make_pair(data_ptr, data_size);
+            }
           }
           m_remaining_payload -= m_payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
           m_payload_ptr = m_payload_ptr->next();
@@ -101,10 +116,10 @@ namespace XTCPP {
           continue;
         }
       }
-      throw std::runtime_error("Unable to find request data: " + alg + "." + data_name);
+      throw std::runtime_error("Unable to find requested data: " + alg + "." + data_name);
     }
 
-    void* BDReader::get_value(size_t idx, XtcData::Name& name, XtcData::DescData& descdata) {
+    std::any BDReader::get_value(size_t idx, XtcData::Name& name, XtcData::DescData& descdata) {
       int data_rank = name.rank();
 
       switch (name.type()) {
@@ -112,70 +127,70 @@ namespace XTCPP {
         if (data_rank > 0) {
           return reinterpret_cast<void*>(descdata.get_array<uint8_t>(idx).data());
         } else {
-          return nullptr;//reinterpret_cast<void*>(&descdata.get_value<uint8_t>(idx));
+          return descdata.get_value<uint8_t>(idx);
         }
       }
       case (XtcData::Name::UINT16): {
         if (data_rank > 0) {
           return reinterpret_cast<void*>(descdata.get_array<uint16_t>(idx).data());
         } else {
-          return nullptr;//reinterpret_cast<void*>(&descdata.get_value<uint16_t>(idx));
+          return descdata.get_value<uint16_t>(idx);
         }
       }
       case (XtcData::Name::UINT32): {
         if (data_rank > 0) {
           return reinterpret_cast<void*>(descdata.get_array<uint32_t>(idx).data());
         } else {
-          return nullptr;//reinterpret_cast<void*>(&descdata.get_value<uint32_t>(idx));
+          return descdata.get_value<uint32_t>(idx);
         }
       }
       case (XtcData::Name::UINT64): {
         if (data_rank > 0) {
           return reinterpret_cast<void*>(descdata.get_array<uint64_t>(idx).data());
         } else {
-          return nullptr;//reinterpret_cast<void*>(&descdata.get_value<uint64_t>(idx));
+          return descdata.get_value<uint64_t>(idx);
         }
       }
       case (XtcData::Name::INT8): {
         if (data_rank > 0) {
           return reinterpret_cast<void*>(descdata.get_array<int8_t>(idx).data());
         } else {
-          return nullptr;//reinterpret_cast<void*>(&descdata.get_value<int8_t>(idx));
+          return descdata.get_value<int8_t>(idx);
         }
       }
       case (XtcData::Name::INT16): {
         if (data_rank > 0) {
           return reinterpret_cast<void*>(descdata.get_array<int16_t>(idx).data());
         } else {
-          return nullptr;//reinterpret_cast<void*>(&descdata.get_value<int16_t>(idx));
+          return descdata.get_value<int16_t>(idx);
         }
       }
       case (XtcData::Name::INT32): {
         if (data_rank > 0) {
           return reinterpret_cast<void*>(descdata.get_array<int32_t>(idx).data());
         } else {
-          return nullptr;//reinterpret_cast<void*>(&descdata.get_value<int32_t>(idx));
+          return descdata.get_value<int32_t>(idx);
         }
       }
       case (XtcData::Name::INT64): {
         if (data_rank > 0) {
           return reinterpret_cast<void*>(descdata.get_array<int64_t>(idx).data());
         } else {
-          return nullptr;//reinterpret_cast<void*>(&descdata.get_value<int64_t>(idx));
+          return descdata.get_value<int64_t>(idx);
         }
       }
       case (XtcData::Name::FLOAT): {
         if(data_rank > 0) {
           return reinterpret_cast<void*>(descdata.get_array<float>(idx).data());
       } else {
-          return nullptr;//reinterpret_cast<void*>(&descdata.get_value<float>(idx));
+          return descdata.get_value<float>(idx);
         }
       }
       case (XtcData::Name::DOUBLE): {
         if (data_rank > 0) {
           return reinterpret_cast<void*>(descdata.get_array<double>(idx).data());
         } else {
-          return nullptr;//reinterpret_cast<void*>(&descdata.get_value<double>(idx));
+          return descdata.get_value<double>(idx);
         }
       }
       case(XtcData::Name::CHARSTR):
@@ -184,11 +199,11 @@ namespace XTCPP {
         if (data_rank > 0) {
           return reinterpret_cast<void*>(descdata.get_array<int32_t>(idx).data());
         } else {
-          return nullptr;//reinterpret_cast<void*>(&descdata.get_value<int32_t>(idx));
+          return descdata.get_value<int32_t>(idx);
         }
       }
       case (XtcData::Name::ENUMDICT):
-        return nullptr;//reinterpret_cast<void*>(&descdata.get_value<int32_t>(idx));
+        return descdata.get_value<int32_t>(idx);
       default:
         throw std::runtime_error("Could not figure out parsing for: " +
                                  std::string(name.name()) +

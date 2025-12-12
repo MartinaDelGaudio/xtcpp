@@ -51,36 +51,38 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
 
   py::class_<XTCPP::MPI::DataSource>(m, "DataSource")
     .def(py::init<std::string,
-	          std::variant<std::string, int>,
-	          size_t>())
+                  std::variant<std::string, int>,
+	                size_t>())
     .def("rank", &XTCPP::MPI::DataSource::rank)
     .def("detector",
-	 &XTCPP::MPI::DataSource::detector,
-	 py::keep_alive<0,1>(),
-	 py::return_value_policy::reference)
+         &XTCPP::MPI::DataSource::detector,
+         py::keep_alive<0,1>(),
+         py::return_value_policy::reference)
     .def("__iter__",
-	 [](XTCPP::MPI::DataSource& ds) {
-	   return py::make_iterator(ds.begin(), ds.end());
-	 },
-	 py::keep_alive<0, 1>());
+         [](XTCPP::MPI::DataSource& ds) {
+           return py::make_iterator(ds.begin(), ds.end());
+         },
+         py::keep_alive<0, 1>());
 
   py::class_<XTCPP::Base::Detector,
-	     std::shared_ptr<XTCPP::Base::Detector>>(m, "Detector")
+             std::shared_ptr<XTCPP::Base::Detector>>(m, "Detector")
     .def(py::init([](std::string detname,
-		     std::string serial_no,
-		     std::vector<unsigned> segment_nos,
-		     std::vector<std::shared_ptr<XTCPP::Base::BDReader>> xtc_readers,
-		     std::string experiment,
-		     std::string run) {
-		    return new XTCPP::Base::Detector(detname,
-						     serial_no,
-						     segment_nos,
-						     xtc_readers,
-						     experiment,
-						     run);
-		  }))
+                     std::string serial_no,
+                     std::vector<unsigned> segment_nos,
+                     std::vector<std::shared_ptr<XTCPP::Base::BDReader>> xtc_readers,
+                     std::string experiment,
+                     std::string run,
+                     bool is_epics) {
+      return new XTCPP::Base::Detector(detname,
+                                       serial_no,
+                                       segment_nos,
+                                       xtc_readers,
+                                       experiment,
+                                       run,
+                                       is_epics);
+    }))
     .def("raw", [](XTCPP::Base::Detector& self, size_t evt) {
-		    return self.get_data(evt, "raw", "raw");
+      return self.get_data(evt, "raw", "raw");
 		})
     .def("calib", [](XTCPP::Base::Detector& self, size_t evt) {
       [[maybe_unused]]auto raw_data = self.get_data(evt, "raw", "raw");
@@ -95,15 +97,16 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
 		  });
 
   py::class_<XTCPP::MPI::Detector,
-	     std::shared_ptr<XTCPP::MPI::Detector>,
-	     XTCPP::Base::Detector>(m, "MPIDetector")
+             std::shared_ptr<XTCPP::MPI::Detector>,
+             XTCPP::Base::Detector>(m, "MPIDetector")
     .def(py::init([](int comm_f,
-		     std::string detname,
-		     std::string serial_no,
-		     std::vector<unsigned> segment_nos,
-		     std::vector<std::shared_ptr<XTCPP::Base::BDReader>> xtc_readers,
-		     std::string experiment,
-		     std::string run) {
+                     std::string detname,
+                     std::string serial_no,
+                     std::vector<unsigned> segment_nos,
+                     std::vector<std::shared_ptr<XTCPP::Base::BDReader>> xtc_readers,
+                     std::string experiment,
+                     std::string run,
+                     bool is_epics) {
       MPI_Comm comm = MPI_Comm_f2c(comm_f);
       ///*
       return new XTCPP::MPI::Detector(comm,
@@ -112,16 +115,21 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
                                       segment_nos,
                                       xtc_readers,
                                       experiment,
-                                      run);
+                                      run,
+                                      is_epics);
     }))
     .def("raw", [](XTCPP::MPI::Detector& self, size_t evt) {
-		    return self.get_data(evt, "raw", "raw");
-		  })
+      if (self.is_epics()) {
+		    return self.get_data(evt, "raw", self.detname());
+      } else {
+        return self.get_data(evt, "raw", "raw");
+      }
+    })
     .def("calib", [](XTCPP::MPI::Detector& self, size_t evt) {
-		    [[maybe_unused]]auto raw_data = self.get_data(evt, "raw", "raw");
-		    //std::vector<std::float32_t> calib_data =
-		    //  XTCPP::calibrate(self.data_ptrs(), self.calibconst_span());
-                    //float* float_data = reinterpret_cast<float*>(calib_data.data());
+      [[maybe_unused]]auto raw_data = self.get_data(evt, "raw", "raw");
+        //std::vector<std::float32_t> calib_data =
+        //  XTCPP::calibrate(self.data_ptrs(), self.calibconst_span());
+        //float* float_data = reinterpret_cast<float*>(calib_data.data());
 		    // This version will fill in a passed buffer. We fill in the buffer
 		    // which is pre-allocated. Then once it is filled with new data
 		    // we will return it.
@@ -134,12 +142,12 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
 		    size_t ncols {1024};
 		    std::vector<size_t> shape {nsegs, nrows, ncols};
 		    return py::array_t<float>(shape, float_data);
-		  });
+    });
 
   py::class_<XTCPP::MPI::HDF5Writer>(m, "SmallData")
     .def(py::init([](size_t batch_size) {
-		    return new XTCPP::MPI::HDF5Writer(MPI_COMM_WORLD, batch_size);
-		  }))
+      return new XTCPP::MPI::HDF5Writer(MPI_COMM_WORLD, batch_size);
+    }))
     .def("event", [](XTCPP::MPI::HDF5Writer& self,
                      py::dict event_data,
                      py::dict event_shape) {
@@ -180,7 +188,7 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
                                       events_per_read);
     }))
     .def("get_next_offsets", &XTCPP::MPI::BDReader::get_next_offsets)
-    .def("read_at", &XTCPP::MPI::BDReader::read_at)
+    .def("read_l1_at", &XTCPP::MPI::BDReader::read_l1_at)
     .def("get_data", &XTCPP::MPI::BDReader::get_data)
     .def("detnames", &XTCPP::MPI::BDReader::detnames)
     .def("segments", &XTCPP::MPI::BDReader::segment_numbers)

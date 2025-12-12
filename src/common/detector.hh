@@ -71,8 +71,9 @@ namespace XTCPP {
                std::string serial_no,
                std::vector<unsigned> segment_nos,
                std::vector<std::shared_ptr<BDReader>> xtc_readers,
-	       std::string experiment,
-	       std::string run);
+               std::string experiment,
+               std::string run,
+               bool is_epics);
 
       /**
        * Retrieve the datagram at an offset index.
@@ -131,6 +132,60 @@ namespace XTCPP {
        */
       std::vector<std::float32_t>& calib_data_buf() { return m_calib_data; }
 
+      /**
+       * The detector name.
+       */
+      std::string detname() const { return m_detname; }
+
+      /**
+       * Whether this is an "EPICS" detector or not.
+       */
+      bool is_epics() const { return m_is_epics; }
+
+    protected:
+      /**
+       * Very dumb function to load a set of calibration constants.
+       * Must have a `gain.npy`, `ped.npy`, `offset.npy` in the current working
+       * directory.
+       */
+      void load_dummy_calib();
+
+      /**
+       * Make a database call to determine the short name from the serial number.
+       * Will populate `m_short_name`.
+       */
+      void get_detector_short_name();
+
+      /**
+       * Utility function to split a string on a delimiter.
+       */
+      std::vector<std::string> split_string(const std::string& s, const std::string& delim);
+
+      /**
+       * Load calibration constants for a specified type.
+       * NOTE: This function is currently only implemented to handle float32 data!
+       * TODO: Handle other constants types.
+       *
+       * @param[in] constants_type The type of constants to load from the database.
+       *            E.g. `pedestals`, `pixel_gain`.
+       * @return constants_shape A pair of the constants and a vector containing
+       *         the shape of those constants.
+       */
+      std::pair<std::vector<std::float32_t>,std::vector<size_t>>
+      load_calib_constants_type(std::string constants_type);
+
+      /**
+       * Load pixel_gain, pixel_offset and pedestals and then construct the CalibStruct
+       * array.
+       */
+      void load_all_calib_constants();
+
+      /**
+       * An initialization function for sub-classes to specify how to setup resources
+       * for their implementations.
+       */
+      virtual void init_resources() {}
+
     protected:
       CalibStruct* m_const_ptr{nullptr}; ///< Underlying memory for holding calib constants
 
@@ -175,47 +230,11 @@ namespace XTCPP {
       std::span<CalibStruct> m_calibconst_span; ///< Span over m_const_ptr
 
       /**
-       * Very dumb function to load a set of calibration constants.
-       * Must have a `gain.npy`, `ped.npy`, `offset.npy` in the current working
-       * directory.
+       * Whether this is an EPICS detector or not. The access mechanisms
+       * are different for EPICS/non-EPICS detectors. Passing the flag
+       * up front makes it simpler long term.
        */
-      void load_dummy_calib();
-
-      /**
-       * Make a database call to determine the short name from the serial number.
-       * Will populate `m_short_name`.
-       */
-      void get_detector_short_name();
-
-      /**
-       * Utility function to split a string on a delimiter.
-       */
-      std::vector<std::string> split_string(const std::string& s, const std::string& delim);
-
-      /**
-       * Load calibration constants for a specified type.
-       * NOTE: This function is currently only implemented to handle float32 data!
-       * TODO: Handle other constants types.
-       *
-       * @param[in] constants_type The type of constants to load from the database.
-       *            E.g. `pedestals`, `pixel_gain`.
-       * @return constants_shape A pair of the constants and a vector containing
-       *         the shape of those constants.
-       */
-      std::pair<std::vector<std::float32_t>,std::vector<size_t>>
-      load_calib_constants_type(std::string constants_type);
-
-      /**
-       * Load pixel_gain, pixel_offset and pedestals and then construct the CalibStruct
-       * array.
-       */
-      void load_all_calib_constants();
-
-      /**
-       * An initialization function for sub-classes to specify how to setup resources
-       * for their implementations.
-       */
-      virtual void init_resources() {}
+      bool m_is_epics{false};
 
       std::shared_ptr<spdlog::logger> m_logger; ///< Logger
 

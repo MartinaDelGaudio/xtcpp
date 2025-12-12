@@ -35,10 +35,13 @@ namespace XTCPP {
       get_next_offsets() override;
 
       virtual std::expected<void, BDReadError>
-      read_at(size_t unwrapped_offset_idx) override;
+      read_slowupdate_at(size_t unwrapped_offset_idx) override;
 
       virtual std::expected<void, BDReadError>
-      iread_at(size_t unwrapped_offset_idx) override;
+      read_l1_at(size_t unwrapped_offset_idx) override;
+
+      virtual std::expected<void, BDReadError>
+      iread_l1_at(size_t unwrapped_offset_idx) override;
 
       virtual std::expected<void, BDReadError> wait() override;
 
@@ -60,10 +63,14 @@ namespace XTCPP {
       int m_n_shmem_ranks;
 
       MPI_Win m_offset_win;
+      MPI_Win m_slow_update_idx_win;
+      MPI_Win m_slow_update_dgram_win;
 
       char* m_dgram_buf;
       char* m_dgram_buf0;
       char* m_dgram_buf1;
+
+      char* m_slow_update_dgram_buf;
 
       char* m_read_ptr;
       char* m_access_ptr;

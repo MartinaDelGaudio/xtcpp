@@ -1,5 +1,6 @@
-#include "../common/detector.hh"
 #include "detector.hh"
+
+#include "common/detector.hh"
 
 #include "xtcdata/xtc/Dgram.hh"
 
@@ -22,12 +23,21 @@ namespace XTCPP {
                        std::string serial_no,
                        std::vector<unsigned> segment_nos,
                        std::vector<std::shared_ptr<Base::BDReader>> xtc_readers,
-		       std::string experiment,
-		       std::string run)
-      : Base::Detector(detname, serial_no, segment_nos, xtc_readers, experiment, run)
+                       std::string experiment,
+                       std::string run,
+                       bool is_epics)
+      : Base::Detector(detname,
+                       serial_no,
+                       segment_nos,
+                       xtc_readers,
+                       experiment,
+                       run,
+                       is_epics)
       , m_comm(comm)
     {
-      init_resources();
+      if (!m_is_epics) {
+        init_resources();
+      }
     }
 
     void Detector::init_resources() {

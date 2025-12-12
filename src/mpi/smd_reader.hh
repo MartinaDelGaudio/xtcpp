@@ -28,7 +28,6 @@ namespace XTCPP
 
       ~SMDReader() override;
 
-      XtcData::Dgram* next();
       /* Synchronous API  */
       /**
        * Perform a synchronous (blocking) read. This API is implemented to read ONE

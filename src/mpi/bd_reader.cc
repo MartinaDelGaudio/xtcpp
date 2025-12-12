@@ -56,16 +56,36 @@ namespace XTCPP {
       MPI_Comm_rank(m_shmem_comm, &m_shmem_rank);
       MPI_Comm_size(m_shmem_comm, &m_n_shmem_ranks);
 
-      size_t window_size{0};
+      size_t offset_window_size{0};
+      size_t slow_update_idx_window_size{0};
+      size_t slow_update_dgram_window_size{0};
       if (m_shmem_rank == 0) {
-        window_size = sizeof(BDXtcOffset)*m_events_per_read;
+        offset_window_size = sizeof(BDXtcOffset)*m_events_per_read;
+        // Wasteful to allocate so much, but we don't know how many...
+        slow_update_idx_window_size = sizeof(ssize_t)*m_events_per_read;
+        slow_update_dgram_window_size = 0x4000000;
       }
-      MPI_Win_allocate_shared(window_size,
+      MPI_Win_allocate_shared(offset_window_size,
                               sizeof(BDXtcOffset),
                               MPI_INFO_NULL,
                               m_shmem_comm,
                               &m_offsets,
                               &m_offset_win);
+
+      MPI_Win_allocate_shared(slow_update_idx_window_size,
+                              sizeof(ssize_t),
+                              MPI_INFO_NULL,
+                              m_shmem_comm,
+                              &m_slow_update_indices,
+                              &m_slow_update_idx_win);
+
+      MPI_Win_allocate_shared(slow_update_dgram_window_size,
+                              sizeof(ssize_t),
+                              MPI_INFO_NULL,
+                              m_shmem_comm,
+                              &m_slow_update_dgram_buf,
+                              &m_slow_update_dgram_win);
+
       if (m_shmem_rank != 0) {
         MPI_Aint query_size;
         int disp_unit;
@@ -74,6 +94,18 @@ namespace XTCPP {
                              &query_size,
                              &disp_unit,
                              &m_offsets);
+
+        MPI_Win_shared_query(m_slow_update_idx_win,
+                             0,
+                             &query_size,
+                             &disp_unit,
+                             &m_slow_update_indices);
+
+        MPI_Win_shared_query(m_slow_update_dgram_win,
+                             0,
+                             &query_size,
+                             &disp_unit,
+                             &m_slow_update_dgram_win);
       }
 
       // We don't care about the dgram (configure) but the read populates the attributes
@@ -83,6 +115,7 @@ namespace XTCPP {
         m_segment_nos = m_smd_reader->segment_numbers();
         m_serial_nos = m_smd_reader->serial_numbers();
         m_det_types = m_smd_reader->det_types();
+        m_epics_detnames = m_smd_reader->epics_detnames();
 
         m_read_ptr = m_dgram_buf0;
         m_access_ptr = m_dgram_buf0;
@@ -109,21 +142,27 @@ namespace XTCPP {
     std::expected<size_t, BDReadError> BDReader::get_next_offsets() {
       MPI_Win_lock_all(0, m_offset_win);
       if (m_shmem_rank == 0) {
-        size_t n_events = 0;
+        size_t n_events {0};
+        size_t n_slow_updates {0};
         auto ret = m_smd_reader->wait();
         if (ret.has_value()) {
           while (n_events < m_events_per_read) {
-            XtcData::Dgram* dg = m_smd_reader->get_offset_into(m_offsets);
+            XtcData::Dgram* dg = m_smd_reader->get_offset_into(m_offsets,
+                                                               m_slow_update_indices);
             if (!dg) {
               break;
             }
             if (dg->service() == XtcData::TransitionId::L1Accept) {
               n_events++;
+            } else if (dg->service() == XtcData::TransitionId::SlowUpdate) {
+              n_slow_updates++;
             }
           }
           m_smd_reader->iread();
           m_num_events = n_events;
-          m_logger->info("Read " + std::to_string(m_num_events) + " offsets");
+          m_num_slow_updates = n_slow_updates;
+          m_logger->info("Read " + std::to_string(m_num_events) + " offsets (W/ " +
+                         std::to_string(m_num_slow_updates) + " slow updates)");
         } else if (ret.error() == SMDReadError::ZeroBytesRead) {
           m_num_events = 0;
         } else {
@@ -132,12 +171,52 @@ namespace XTCPP {
       }
       MPI_Win_sync(m_offset_win);
       MPI_Bcast(&m_num_events, 1, MPI_UNSIGNED_LONG_LONG, 0, m_shmem_comm);
+      MPI_Bcast(&m_num_slow_updates, 1, MPI_LONG_LONG, 0, m_shmem_comm);
       MPI_Win_unlock_all(m_offset_win);
       return m_num_events;
     }
 
     std::expected<void, BDReadError>
-    BDReader::read_at(size_t unwrapped_offset_idx) {
+    BDReader::read_slowupdate_at(size_t unwrapped_offset_idx) {
+      ssize_t l1_before_slow_update_idx = m_slow_update_indices[m_curr_slow_update_index];
+      if (l1_before_slow_update_idx <= static_cast<ssize_t>(unwrapped_offset_idx) &&
+          m_curr_slow_update_index < m_num_slow_updates) {
+        m_curr_slow_update_index++;
+        BDXtcOffset& prev_l1_offset =
+          m_offsets[m_slow_update_indices[m_curr_slow_update_index]];
+        MPI_Offset file_offset = prev_l1_offset.offset + prev_l1_offset.size;
+        size_t dgram_size = 0x4000000;
+
+        XtcData::Dgram* dg = reinterpret_cast<XtcData::Dgram*>(m_slow_update_dgram_buf);
+        MPI_Status status;
+        MPI_Win_lock_all(0, m_slow_update_dgram_win);
+        if (m_shmem_rank == 0) {
+          int rc = MPI_File_read_at(m_fh,
+                                    file_offset,
+                                    dg,
+                                    dgram_size,
+                                    MPI_BYTE,
+                                    &status);
+          /* An error mechanism is needed to distribute the info.. */
+          if (rc != MPI_SUCCESS) {
+            char error_buf[256];
+            int error_buf_len;
+            MPI_Error_string(rc, error_buf, &error_buf_len);
+            m_logger->error("*** iread was unsuccessful: " +
+                            std::string(error_buf));
+            return std::unexpected(BDReadError::GeneralIOError);
+          }
+        }
+        MPI_Win_sync(m_slow_update_dgram_win);
+        MPI_Win_unlock_all(m_slow_update_dgram_win);
+        m_payload_ptr = reinterpret_cast<XtcData::Xtc*>(dg->xtc.payload());
+        m_remaining_payload = dg->xtc.sizeofPayload();
+      }
+      return {};
+    }
+
+    std::expected<void, BDReadError>
+    BDReader::read_l1_at(size_t unwrapped_offset_idx) {
       size_t offset_idx = unwrapped_offset_idx % m_events_per_read;
       if (offset_idx >= m_num_events) {
         return std::unexpected(BDReadError::AllDgramOffsetsRead);
@@ -178,7 +257,7 @@ namespace XTCPP {
 
 
     std::expected<void, BDReadError>
-    BDReader::iread_at(size_t unwrapped_offset_idx) {
+    BDReader::iread_l1_at(size_t unwrapped_offset_idx) {
       size_t offset_idx = unwrapped_offset_idx % m_events_per_read;
       if (offset_idx >= m_num_events) {
         return std::unexpected(BDReadError::AllDgramOffsetsRead);
