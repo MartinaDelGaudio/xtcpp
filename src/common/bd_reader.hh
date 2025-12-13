@@ -1,8 +1,9 @@
 #ifndef XTCPP_BASE_BDREADER_HH
 #define XTCPP_BASE_BDREADER_HH
 
-#include "smd_reader.hh"
+#include "common/smd_reader.hh"
 
+#include "smd_reader.hh"
 #include "xtcdata/xtc/DescData.hh"
 #include "xtcdata/xtc/Dgram.hh"
 #include "xtcdata/xtc/NamesLookup.hh"
@@ -189,7 +190,7 @@ namespace XTCPP {
        * the offset index of 43.). This array is signed, because a value of -1
        * indicates that before the first L1Accept, there is a SlowUpdate.
        */
-      std::shared_ptr<ssize_t[]> m_slow_update_indices {nullptr};
+      std::shared_ptr<SlowUpdateXtcOffset[]> m_slow_updates{nullptr};
       size_t m_curr_slow_update_index{0};
       size_t m_num_slow_updates;
 

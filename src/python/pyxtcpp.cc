@@ -64,37 +64,35 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
          },
          py::keep_alive<0, 1>());
 
-  py::class_<XTCPP::Base::Detector,
-             std::shared_ptr<XTCPP::Base::Detector>>(m, "Detector")
-    .def(py::init([](std::string detname,
-                     std::string serial_no,
-                     std::vector<unsigned> segment_nos,
-                     std::vector<std::shared_ptr<XTCPP::Base::BDReader>> xtc_readers,
-                     std::string experiment,
-                     std::string run,
-                     bool is_epics) {
-      return new XTCPP::Base::Detector(detname,
-                                       serial_no,
-                                       segment_nos,
-                                       xtc_readers,
-                                       experiment,
-                                       run,
-                                       is_epics);
-    }))
-    .def("raw", [](XTCPP::Base::Detector& self, size_t evt) {
-      return self.get_data(evt, "raw", "raw");
-		})
-    .def("calib", [](XTCPP::Base::Detector& self, size_t evt) {
-      [[maybe_unused]]auto raw_data = self.get_data(evt, "raw", "raw");
-		    std::vector<std::float32_t> calib_data =
-		      XTCPP::calibrate(self.data_ptrs(), self.calibconst_span());
-		    float* float_data = reinterpret_cast<float*>(calib_data.data());
-		    size_t nsegs {32};
-		    size_t nrows {512};
-		    size_t ncols {1024};
-		    std::vector<size_t> shape {nsegs, nrows, ncols};
-		    return py::array_t<float>(shape, float_data);
-		  });
+  py::class_<XTCPP::Base::Detector, std::shared_ptr<XTCPP::Base::Detector>>(
+      m, "Detector")
+      .def(py::init(
+          [](std::string detname, std::string serial_no,
+             std::vector<unsigned> segment_nos,
+             std::vector<std::shared_ptr<XTCPP::Base::BDReader>> xtc_readers,
+             std::string experiment, std::string run, bool is_epics) {
+            return new XTCPP::Base::Detector(detname, serial_no, segment_nos,
+                                             xtc_readers, experiment, run,
+                                             is_epics);
+          }))
+      .def("raw", [](XTCPP::Base::Detector& self, size_t evt) {
+        if (self.is_epics()) {
+          return self.get_slow_update_data(evt);
+        } else {
+          return self.get_l1_data(evt, "raw", "raw");
+        }
+      })
+      .def("calib", [](XTCPP::Base::Detector& self, size_t evt) {
+        [[maybe_unused]] auto raw_data = self.get_l1_data(evt, "raw", "raw");
+        std::vector<std::float32_t> calib_data =
+            XTCPP::calibrate(self.data_ptrs(), self.calibconst_span());
+        float* float_data = reinterpret_cast<float*>(calib_data.data());
+        size_t nsegs{32};
+        size_t nrows{512};
+        size_t ncols{1024};
+        std::vector<size_t> shape{nsegs, nrows, ncols};
+        return py::array_t<float>(shape, float_data);
+      });
 
   py::class_<XTCPP::MPI::Detector,
              std::shared_ptr<XTCPP::MPI::Detector>,
@@ -120,13 +118,13 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
     }))
     .def("raw", [](XTCPP::MPI::Detector& self, size_t evt) {
       if (self.is_epics()) {
-		    return self.get_data(evt, "raw", self.detname());
+		    return self.get_slow_update_data(evt);
       } else {
-        return self.get_data(evt, "raw", "raw");
+        return self.get_l1_data(evt, "raw", "raw");
       }
     })
     .def("calib", [](XTCPP::MPI::Detector& self, size_t evt) {
-      [[maybe_unused]]auto raw_data = self.get_data(evt, "raw", "raw");
+      [[maybe_unused]]auto raw_data = self.get_l1_data(evt, "raw", "raw");
         //std::vector<std::float32_t> calib_data =
         //  XTCPP::calibrate(self.data_ptrs(), self.calibconst_span());
         //float* float_data = reinterpret_cast<float*>(calib_data.data());

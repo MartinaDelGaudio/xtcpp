@@ -1,6 +1,4 @@
 #include "mpi/datasource.hh"
-#include "hdf5/mpiwriter.hh"
-#include "hdf5/hdf5writer.hh"
 
 #include "mpi.h"
 
@@ -21,11 +19,10 @@ namespace fs = std::filesystem;
 
 void usage(char* progname)
 {
-  std::cerr << "Usage: " << progname << " -e <experiment> -r <run> [-n <fetch_events>] [-c] [-s] [-t]" << std::endl
+  std::cerr << "Usage: " << progname << " -e <experiment> -r <run> [-n <fetch_events>] [-p]" << std::endl
             << std::endl
             << R"a(
-Run some test processing on `jungfrau` and `epix100_0` for an MFX experiment.
-NOTE: Both detectors must be present in the experiment/run chosen.
+Run some test processing on an epicsArch PV.
 
 Can also be run with MPI
   - `mpirun -np <NUM PROCS> ...
@@ -38,9 +35,7 @@ Args:
   -e <experiment> Experiment to process
   -r    <run>     Run number to process
   -n <fetch_evts> Number of offsets to read per fetch of .smd.xtc2 file.
- [-c]             Optionally run the `calib` method instead of `raw`.
- [-s]             Optionally write an HDF5 file with a ROI for the jungfrau.
- [-t]             Set a total number of events to iterate.
+ [-p]             Optionally print out the values of the PV.
  [-h]             Display this help message.)a";
 }
 
@@ -49,19 +44,14 @@ int main(int argc, char* argv[]) {
   int parse_errors = 0;
   size_t events_per_read{1000};
 
-  size_t total_events{0};
-  bool run_calib{false};
-  bool test_smd{false};
+  bool print{false};
   std::string experiment;
   std::string run;
-  while ((c = getopt(argc, argv, "hce:n:r:st")) != -1) {
+  while ((c = getopt(argc, argv, "he:n:r:p")) != -1) {
     switch (c) {
     case 'h':
       usage(argv[0]);
       exit(0);
-    case 'c':
-      run_calib = true;
-      break;
     case 'e':
       experiment = optarg;
       break;
@@ -71,11 +61,8 @@ int main(int argc, char* argv[]) {
     case 'r':
       run = optarg;
       break;
-    case 's':
-      test_smd = true;
-      break;
-    case 't':
-      total_events = static_cast<size_t>(std::atoi(optarg));
+    case 'p':
+      print = true;
       break;
     default:
       parse_errors++;
@@ -95,13 +82,9 @@ int main(int argc, char* argv[]) {
     std::chrono::time_point<std::chrono::steady_clock> load_start_time =
       std::chrono::steady_clock::now();
 
-    using SmallData = XTCPP::MPI::HDF5Writer;
     XTCPP::MPI::DataSource ds(experiment, run, events_per_read);
-    SmallData small_data(MPI_COMM_WORLD);
-    small_data.open_file();
 
-    auto epix100 = ds.detector("epix100_0");
-    auto jungfrau = ds.detector("jungfrau");
+    auto det = ds.detector("laser_lib_mirror_y_2");
     std::chrono::time_point<std::chrono::steady_clock> load_end_time =
       std::chrono::steady_clock::now();
 
@@ -109,32 +92,9 @@ int main(int argc, char* argv[]) {
     int n_events{0};
 
     for (auto it=ds.begin(); it != ds.end(); it++) {
-      //std::cout << "Event offset index: " << *it << " [Rank: " << ds.rank() << "]" << std::endl;
-      //auto dg_epix100 = epix100(*it);
-      //auto dg_jungfrau = jungfrau(*it);
-      [[maybe_unused]] auto raw_epix100  = epix100->get_l1_data(*it,"raw","raw");
-      auto raw_jungfrau = jungfrau->get_l1_data(*it,"raw","raw");
-
-      if (run_calib && raw_jungfrau) {
-        //auto calib_jungfrau = XTCPP::calibrate(jungfrau->data_ptrs(), jungfrau->calibconst_span());
-        XTCPP::calibrate(jungfrau->data_ptrs(),
-                         jungfrau->calibconst_span(),
-                         jungfrau->calib_data_buf());
-
-        if (test_smd && n_events % 1 == 0) {
-          //std::vector<std::float32_t> dat_to_write(calib_jungfrau.begin(),
-          //					   calib_jungfrau.begin() + 512*1024);
-          std::vector<std::float32_t> dat_to_write(jungfrau->calib_data_buf().begin(),
-                                                   jungfrau->calib_data_buf().begin() + 512*1024);
-          std::map<std::string,std::vector<size_t>> shape;
-          shape["/jungfrau/test"] = {1,512,1024};
-          std::map<std::string,std::any> evt_data;
-          evt_data["/jungfrau/test"]=dat_to_write;
-          small_data.event(evt_data, shape);
-        }
-        if (total_events && static_cast<size_t>(ds.size()*n_events) >= total_events) {
-          break;
-        }
+      auto raw_det  = det->get_slow_update_data(*it);
+      if (print) {
+        std::cout << "Value is: " << *reinterpret_cast<double*>(raw_det) << std::endl;
       }
       n_events++;
     }

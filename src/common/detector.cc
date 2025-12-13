@@ -1,6 +1,7 @@
-#include "detector.hh"
+#include "common/detector.hh"
 
-#include "bd_reader.hh"
+#include "common/bd_reader.hh"
+
 #include "xtcdata/xtc/Dgram.hh"
 
 #include "httplib.h"
@@ -133,11 +134,11 @@ namespace XTCPP {
 
       const char* det_read_mode = std::getenv("XTCPP_DET_GETDATA");
       if (det_read_mode && std::string(det_read_mode) == "THREADED") {
-        get_data_impl = &Detector::get_data_threaded;
+        get_l1_data_impl = &Detector::get_l1_data_threaded;
         // ThreadPool is not copyable/moveable - construct in place
         m_thread_pool.emplace(m_xtc_readers.size());
       } else {
-        get_data_impl = &Detector::get_data_sequential;
+        get_l1_data_impl = &Detector::get_l1_data_sequential;
         m_thread_pool = std::nullopt;
       }
     }
@@ -434,13 +435,43 @@ namespace XTCPP {
       }
     }
 
-    void* Detector::get_data(size_t offset_idx,
-                             const std::string& alg,
-                             const std::string& data_name) {
-      return (this->*get_data_impl)(offset_idx, alg, data_name);
+    void* Detector::get_l1_data(size_t offset_idx,
+                                const std::string& alg,
+                                const std::string& data_name) {
+      return (this->*get_l1_data_impl)(offset_idx, alg, data_name);
     }
 
-    void* Detector::get_data_threaded(size_t offset_idx,
+    void* Detector::get_slow_update_data(size_t offset_idx) {
+      if (!m_is_epics) {
+        m_logger->warn("This function is for EPICS detectors! Use get_l1_data instead.");
+        return nullptr;
+      }
+      for (auto& reader : m_xtc_readers) {
+        std::expected<void, BDReadError> ret;
+        ret = reader->read_slowupdate_at(offset_idx);
+        if (ret.has_value()) {
+          // Data is stored under "epics" detector. The algorithm
+          // is always "raw" and the field name is the PV name - our m_detname
+          std::vector<unsigned> reader_seg_nos =
+            reader->segment_numbers()["epics"];
+          unsigned seg_no = reader_seg_nos[0]; // There should only be 1
+          std::string epics_detname{"epics"};
+          std::string epics_alg{"raw"};
+          std::string pv_name{m_detname};
+          auto [data_ptr, data_size] =
+            reader->get_data(epics_detname, seg_no, epics_alg, pv_name);
+
+          m_data_ptrs[seg_no] = data_ptr;
+          m_data_sizes[seg_no] = data_size;
+        } else {
+          // Handle errors?
+          return nullptr;
+        }
+      }
+      return m_data_ptrs[0];
+    }
+
+    void* Detector::get_l1_data_threaded(size_t offset_idx,
                                       const std::string& alg,
                                       const std::string& data_name) {
       /*
@@ -481,9 +512,9 @@ namespace XTCPP {
       return m_data_ptrs.data();
     }
 
-    void* Detector::get_data_sequential(size_t offset_idx,
-                                        const std::string& alg,
-                                        const std::string& data_name) {
+    void* Detector::get_l1_data_sequential(size_t offset_idx,
+                                           const std::string& alg,
+                                           const std::string& data_name) {
       /*
         m_logger->trace("Getting data for algorithm {} and field {} at offset idx {}",
                         alg,
@@ -492,43 +523,13 @@ namespace XTCPP {
       */
       // Launch all read asynchronously
       for (auto& reader : m_xtc_readers) {
-        std::expected<void, BDReadError> ret;
-        if (m_is_epics) {
-          ret = reader->read_slowupdate_at(offset_idx);
-          if (ret.has_value()) {
-            // m_logger->trace("** Have a non-null dgram return. Now accessing
-            // the data field.");
-            std::vector<unsigned> reader_seg_nos =
-                reader->segment_numbers()[m_detname];
-            auto seg_no_it = reader_seg_nos.begin();
-            while (seg_no_it != reader_seg_nos.end()) {
-              auto [data_ptr, data_size] =
-                  reader->get_data(m_detname, *seg_no_it, alg, data_name);
-
-              m_data_ptrs[*seg_no_it] = data_ptr;
-              m_data_sizes[*seg_no_it] = data_size;
-
-              // m_logger->trace("*** Filled in data for segment # {}",
-              // *seg_no_it);
-              seg_no_it++;
-            }
-          } else {
-            return nullptr;
-          }
-        } else {
-          ret = reader->iread_l1_at(offset_idx);
-        }
-        //auto ret = reader->iread_l1_at(offset_idx);
+        std::expected<void, BDReadError> ret = ret = reader->iread_l1_at(offset_idx);
         if (ret.has_value()) {
           continue;
         } else {
           // Handle errors?
           return nullptr;
         }
-      }
-
-      if (m_is_epics) {
-        return m_data_ptrs.data();
       }
 
       // Now wait on all of them

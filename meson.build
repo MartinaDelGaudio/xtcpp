@@ -30,16 +30,9 @@ pybind11_dep = dependency('pybind11', required: true)
 #mpi_dep = dependency('mpi', required: true)
 
 include_directories = include_directories(
-    '/sdf/group/lcls/ds/ana/sw/conda2/rel/lcls2_100925/install/include',
     '/sdf/group/lcls/ds/ana/sw/conda2/inst/envs/ps_20241122/include',
-)
-
-# Specify library directories
-library_directories = [
-    '/sdf/group/lcls/ds/ana/sw/conda2/rel/lcls2_100925/install/lib',
-    '/sdf/group/lcls/ds/ana/sw/conda2/inst/envs/ps_20241122/lib',
     'src',
-]
+)
 
 openmp_dep = dependency('openmp', required: true)
 
@@ -198,6 +191,25 @@ jungfrau_test_app = executable(
     'jungfrau_reader',
     [
         'src/app/jungfrau_reader.cc',
+    ],
+    dependencies: [
+        xtcpp_mpi_dep,
+        xtcpp_hdf5_dep,
+    ],
+    include_directories: include_directories(
+        'src',
+    ),
+    install: true,
+    install_dir: get_option('bindir'),
+    # *** this is horrible but I don't know how to fix it *** #
+    build_rpath: '$ORIGIN/../lib/python' + py_ver + '/site-packages',
+    install_rpath: '$ORIGIN/../lib/python' + py_ver + '/site-packages',
+)
+
+epics_test_app = executable(
+    'epics_reader',
+    [
+        'src/app/epics_reader.cc',
     ],
     dependencies: [
         xtcpp_mpi_dep,

@@ -1,5 +1,8 @@
-#include "bd_reader.hh"
-#include "smd_reader.hh"
+#include "mpi/bd_reader.hh"
+
+#include "common/bd_reader.hh"
+#include "common/smd_reader.hh"
+#include "mpi/smd_reader.hh"
 
 #include "xtcdata/xtc/DescData.hh"
 #include "xtcdata/xtc/Dgram.hh"
@@ -62,7 +65,7 @@ namespace XTCPP {
       if (m_shmem_rank == 0) {
         offset_window_size = sizeof(BDXtcOffset)*m_events_per_read;
         // Wasteful to allocate so much, but we don't know how many...
-        slow_update_idx_window_size = sizeof(ssize_t)*m_events_per_read;
+        slow_update_idx_window_size = sizeof(SlowUpdateXtcOffset)*m_events_per_read;
         slow_update_dgram_window_size = 0x4000000;
       }
       MPI_Win_allocate_shared(offset_window_size,
@@ -73,14 +76,14 @@ namespace XTCPP {
                               &m_offset_win);
 
       MPI_Win_allocate_shared(slow_update_idx_window_size,
-                              sizeof(ssize_t),
+                              sizeof(SlowUpdateXtcOffset),
                               MPI_INFO_NULL,
                               m_shmem_comm,
-                              &m_slow_update_indices,
+                              &m_slow_updates,
                               &m_slow_update_idx_win);
 
       MPI_Win_allocate_shared(slow_update_dgram_window_size,
-                              sizeof(ssize_t),
+                              sizeof(char),
                               MPI_INFO_NULL,
                               m_shmem_comm,
                               &m_slow_update_dgram_buf,
@@ -99,7 +102,7 @@ namespace XTCPP {
                              0,
                              &query_size,
                              &disp_unit,
-                             &m_slow_update_indices);
+                             &m_slow_updates);
 
         MPI_Win_shared_query(m_slow_update_dgram_win,
                              0,
@@ -148,7 +151,7 @@ namespace XTCPP {
         if (ret.has_value()) {
           while (n_events < m_events_per_read) {
             XtcData::Dgram* dg = m_smd_reader->get_offset_into(m_offsets,
-                                                               m_slow_update_indices);
+                                                               m_slow_updates);
             if (!dg) {
               break;
             }
@@ -178,19 +181,30 @@ namespace XTCPP {
 
     std::expected<void, BDReadError>
     BDReader::read_slowupdate_at(size_t unwrapped_offset_idx) {
-      ssize_t l1_before_slow_update_idx = m_slow_update_indices[m_curr_slow_update_index];
-      if (l1_before_slow_update_idx <= static_cast<ssize_t>(unwrapped_offset_idx) &&
+      SlowUpdateXtcOffset su_offset = m_slow_updates[m_curr_slow_update_index];
+      ssize_t prev_l1_idx = su_offset.previous_l1_index;
+      if (prev_l1_idx <= static_cast<ssize_t>(unwrapped_offset_idx) &&
           m_curr_slow_update_index < m_num_slow_updates) {
         m_curr_slow_update_index++;
-        BDXtcOffset& prev_l1_offset =
-          m_offsets[m_slow_update_indices[m_curr_slow_update_index]];
-        MPI_Offset file_offset = prev_l1_offset.offset + prev_l1_offset.size;
-        size_t dgram_size = 0x4000000;
+        size_t dgram_size = su_offset.size;
+        /* Sigh... For some reason transition sizes in .xtc2 and .smd.xtc2
+           files are different. See more comments in common/smd_reader.cc...
+           So if prev_l1_idx is -1, figure out the offset from the L1Accept
+           offset that follows...
+         */
+        MPI_Offset file_offset;
+        if (prev_l1_idx == -1) {
+          BDXtcOffset& l1_offset = m_offsets[offset_idx];
+          file_offset = l1_offset - dgram_size;
+        } else {
+          file_offset = su_offset.offset;
+        }
 
         XtcData::Dgram* dg = reinterpret_cast<XtcData::Dgram*>(m_slow_update_dgram_buf);
-        MPI_Status status;
         MPI_Win_lock_all(0, m_slow_update_dgram_win);
         if (m_shmem_rank == 0) {
+          MPI_Status status;
+          std::memset(&status, 0, sizeof(MPI_Status));
           int rc = MPI_File_read_at(m_fh,
                                     file_offset,
                                     dg,
@@ -202,8 +216,18 @@ namespace XTCPP {
             char error_buf[256];
             int error_buf_len;
             MPI_Error_string(rc, error_buf, &error_buf_len);
-            m_logger->error("*** iread was unsuccessful: " +
+            m_logger->error("*** read was unsuccessful: " +
                             std::string(error_buf));
+            return std::unexpected(BDReadError::GeneralIOError);
+          }
+          int count;
+          MPI_Get_count(&status, MPI_BYTE, &count);
+          if (count == 0) {
+            return std::unexpected(BDReadError::ZeroBytesRead);
+          } else if (count == MPI_UNDEFINED) {
+            // This happens if count is not a multiple of the element type
+            // The element type is the one used for the read (MPI_BYTE)
+            m_logger->error("*** On read, read was not a multiple of MPI_BYTE");
             return std::unexpected(BDReadError::GeneralIOError);
           }
         }

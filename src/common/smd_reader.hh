@@ -7,6 +7,7 @@
 
 #include "spdlog/sinks/stdout_color_sinks.h"
 
+#include <cstdint>
 #include <stdio.h>
 
 #include <expected>
@@ -23,7 +24,8 @@ namespace XTCPP
    * file. A vector/array of these should be used to represent the offsets of an
    * entire XTC2 or a portion of it.
    * Note, the offset and size refer to the "big data" XTC2 files. They are however,
-   * the stored in the smalldata .smd.xtc2 files.
+   * stored in the smalldata .smd.xtc2 files.
+   * These offsets are for the L1Accept data only.
    */
 #pragma pack(push, 1)
   struct BDXtcOffset {
@@ -35,8 +37,40 @@ namespace XTCPP
       : offset(offset_)
       , size(size_)
     {}
-    uint64_t offset; ///< Offset of the datagram in bytes
-    uint64_t size; ///< Size of the datagram
+    uint64_t offset; ///< Offset in CORRESPONDING big data .xtc2 file for L1Accept
+    uint64_t size; ///< Size of the L1Accept datagram
+  };
+#pragma pack(pop)
+
+  /**
+   * Holds information about the offset and size of a single datagram in an XTC2
+   * file. A vector/array of these should be used to represent the offsets of an
+   * entire XTC2 or a portion of it.
+   * Note, the offset and size refer to the "big data" XTC2 files. They are
+   * however, stored in the smalldata .smd.xtc2 files.
+   * These offsets are for the SlowUpdate transitions only.
+   */
+#pragma pack(push, 1)
+  struct SlowUpdateXtcOffset {
+    SlowUpdateXtcOffset()
+      : previous_l1_index(-1)
+      , offset(0)
+      , size(0)
+    {}
+    SlowUpdateXtcOffset(int64_t prev_l1_idx_, uint64_t offset_, uint64_t size_)
+      : previous_l1_index(prev_l1_idx_)
+      , offset(offset_)
+      , size(size_)
+    {}
+
+    /**
+     * This indicates the preivous L1Accept immediately preceeding the SlowUpdate.
+     * This can be used to determine if a new SlowUpdate read is needed.
+     * E.g. If previous_l1_index is 10 and event index is 11 you must read.
+     */
+    int64_t previous_l1_index;
+    uint64_t offset; ///< Offset in CORRESPONDING big data .xtc2 file for SlowUpdate
+    uint64_t size; ///< Size of the SlowUpdate datagram
   };
 #pragma pack(pop)
 
@@ -116,12 +150,12 @@ namespace XTCPP
        *
        * @param[in] offset_buf An external buffer that the BDXtcOffset objects
        *            will be constructed into.
-       * @param[in] slow_update_idx_buf An external buffer that the SlowUpdate
+       * @param[in] slow_update_buf An external buffer that the SlowUpdate
        *            indices will be added into.
        * @return dgram The pointer to the next datagram.
        */
       XtcData::Dgram* get_offset_into(std::shared_ptr<BDXtcOffset[]> offset_buf,
-                                      std::shared_ptr<ssize_t[]> slow_update_idx_buf);
+                                      std::shared_ptr<SlowUpdateXtcOffset[]> slow_update_buf);
 
       /**
        * Construct the offset instance and return it.
@@ -186,16 +220,19 @@ namespace XTCPP
                        XtcData::TransitionId::Value transition_id);
 
     protected:
-      std::string m_smd_path;
-      size_t m_events_per_read;
-      size_t m_max_dgram_size;
-      size_t m_curr_offset_idx{0};
-      size_t m_curr_slow_update_idx{0};
-      size_t m_file_offset{0};
+      std::string m_smd_path; ///< Path to the .smd.xtc2 file
+      size_t m_events_per_read; ///< Max number of BDXtcOffset's to read at once
+      size_t m_max_dgram_size; ///< Max datagram size for synchronous single reads
+      size_t m_curr_offset_idx{0}; ///< Current index into BDXtcOffset buffer
+      size_t m_curr_slow_update_idx{0}; ///< Current index into SlowUpdateXtcOffset buffer
+      ssize_t m_num_l1s_seen{-1}; ///< Number of L1 indices passed.
+      size_t m_file_offset{0}; ///< Offset in the file
 
-      char* m_access_ptr;
-      size_t m_access_offset{0};
-      size_t m_file_size;
+      char* m_access_ptr; ///< Pointer to the buffer that has been read into
+      size_t m_access_offset{0}; ///< Offset within the data buffer
+      size_t m_file_size; ///< Total size of the .smd.xtc2 file
+
+      size_t m_read_count{0}; ///< Number of bytes read on last read
 
       std::vector<std::string> m_detnames;
       std::map<std::string, std::vector<unsigned>> m_segment_nos;

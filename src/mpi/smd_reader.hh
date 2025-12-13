@@ -58,7 +58,6 @@ namespace XTCPP
       char* m_file_buf1;
 
       char* m_read_ptr;
-      size_t m_read_count{0};
 
       MPIO_Request m_read_req{MPI_REQUEST_NULL};
 

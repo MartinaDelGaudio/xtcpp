@@ -1,5 +1,6 @@
-#include "bd_reader.hh"
-#include "smd_reader.hh"
+#include "common/bd_reader.hh"
+
+#include "common/smd_reader.hh"
 
 #include "xtcdata/xtc/DescData.hh"
 #include "xtcdata/xtc/Dgram.hh"
@@ -71,48 +72,63 @@ namespace XTCPP {
       auto& seg_alg_data_offset = det_offset_map[seg_alg_data];
 
       auto& alg_map = const_cast<AlgDataNameIndex&>(m_smd_reader->alg_map());
+      // Starting_ptr will be used for calculating an address offset
       char* starting_ptr = reinterpret_cast<char*>(m_payload_ptr);
-      while (m_remaining_payload > 0) {
-        XtcData::ShapesData& shapesdata = *reinterpret_cast<XtcData::ShapesData*>(m_payload_ptr);
+      // Payload_ptr will be updated to iterate through the data w/o updating
+      // the stored m_payload_ptr which will always point to the start of the
+      // entire datagram payload.
+      XtcData::Xtc* payload_ptr = m_payload_ptr;
+      size_t remaining_payload = m_remaining_payload;
+      while (remaining_payload > 0) {
+        XtcData::ShapesData& shapesdata = *reinterpret_cast<XtcData::ShapesData*>(payload_ptr);
+        size_t single_shapes_offset{0};
+        size_t shape_index{0};
         try {
           XtcData::DescData descdata(shapesdata, alg_map[detname][alg][seg_no]);
           XtcData::Names& names = descdata.nameindex().names();
           if (names.segment() != seg_no) {
-            m_remaining_payload -= m_payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
-            m_payload_ptr = m_payload_ptr->next();
+            size_t shapes_data_size {payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc)};
+            remaining_payload -= shapes_data_size;
+            payload_ptr = payload_ptr->next();
             continue;
           }
           for (size_t i = 0; i < names.num(); i++) {
             XtcData::Name& name = names.get(i);
             if (name.name() != data_name) {
+              if (name.rank() == 0) {
+                single_shapes_offset += XtcData::Name::get_element_size(name.type());
+              } else {
+                single_shapes_offset += shapesdata.shapes().get(shape_index).size(name);
+                shape_index++;
+              }
               continue;
             }
-            size_t data_size = static_cast<size_t>(m_payload_ptr->sizeofPayload());
-            //m_remaining_payload -= m_payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
-            //m_payload_ptr = m_payload_ptr->next();
 
-            std::any val = get_value(i, name, descdata);
-            if (auto data = std::any_cast<void*>(val)) {
-              //void* data = get_value(i, name, descdata);
+            XtcData::Data& selected_data = shapesdata.data();
+            char* data_addr = selected_data.payload() + single_shapes_offset;
+            void* data_ptr = reinterpret_cast<void*>(data_addr);
 
-              size_t diff = reinterpret_cast<char*>(data) - starting_ptr;
-              seg_alg_data_offset.offset = diff;
-              seg_alg_data_offset.size = data_size;
-              return std::make_pair(data, data_size);
+            size_t offset = data_addr - starting_ptr;
+            size_t data_size{0};
+            if (name.rank() == 0) {
+              data_size = XtcData::Name::get_element_size(name.type());
             } else {
-              void* data_ptr = reinterpret_cast<void*>(reinterpret_cast<char*>(starting_ptr) + 56);
-              size_t diff = 56;
-              seg_alg_data_offset.offset = diff;
-              seg_alg_data_offset.size = data_size;
-              return std::make_pair(data_ptr, data_size);
+              data_size = shapesdata.shapes().get(shape_index).size(name);
             }
+
+            // Unfortunately, for EPICS this lookup table is somewhat unintuitive
+            // but it still works. The PV name is in seg_alg_data, with detname
+            // being "epics"
+            seg_alg_data_offset.offset = offset;
+            seg_alg_data_offset.size = data_size;
+            return std::make_pair(data_ptr, data_size);
           }
-          m_remaining_payload -= m_payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
-          m_payload_ptr = m_payload_ptr->next();
+          remaining_payload -= payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
+          payload_ptr = payload_ptr->next();
         } catch (...) {
           //
-          m_remaining_payload -= m_payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
-          m_payload_ptr = m_payload_ptr->next();
+          remaining_payload -= payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
+          payload_ptr = payload_ptr->next();
           continue;
         }
       }

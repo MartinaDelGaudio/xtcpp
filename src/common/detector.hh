@@ -89,16 +89,31 @@ namespace XTCPP {
       /**
        * Return the data associated with a specific "algorithm" and field name
        * for the specified offset index.
+       * This function searches for L1Accept data which is applicable to all
+       * detectors *except* EPICS (epicsArch).
+       *
        * @param[in] offset_idx The index (i.e. event) to retrieve data for.
        * @param[in] alg The algorithm, e.g. `raw`.
        * @param[in] data_name The field/data name within the algorithm. E.g. `raw`.
-       * @return data The poitner to the requested data inside the datagram. May be
+       * @return data The pointer to the requested data inside the datagram. May be
        *              a nullptr if not found (e.g. doesn't exist). In general, you should
        *              use the `data_ptrs` function for easier handling as this returns
        *              an unstructured pointer to the underlying set of pointers for
        *              potentially many segments.
        */
-      virtual void* get_data(size_t offset_idx, const std::string& alg, const std::string& data_name);
+      virtual void* get_l1_data(size_t offset_idx, const std::string& alg, const std::string& data_name);
+
+      /**
+       * Return the closest SlowUpdate data to the offset index.
+       * epicsArch data does not have an algorithm or field/data name. The data
+       * are stored under the `epics` detector using the PV name. That PV name
+       * is used as the Detector name here, so no further information is
+       * required to look up the data.
+       *
+       * @param[in] offset_idx The index (i.e. event) to retrieve data for.
+       * @return data The pointer to the requested SlowUpdate data.
+       */
+      virtual void* get_slow_update_data(size_t offset_idx);
 
       /**
        * Access the calibration constants.
@@ -243,9 +258,9 @@ namespace XTCPP {
       using GetDataFn = void* (Detector::*)(size_t,
                                             const std::string&,
                                             const std::string&);
-      GetDataFn get_data_impl;
-      void* get_data_threaded(size_t, const std::string&, const std::string&);
-      void* get_data_sequential(size_t, const std::string&, const std::string&);
+      GetDataFn get_l1_data_impl;
+      void* get_l1_data_threaded(size_t, const std::string&, const std::string&);
+      void* get_l1_data_sequential(size_t, const std::string&, const std::string&);
     };
   } // namespace Base
 }
