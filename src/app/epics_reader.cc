@@ -19,7 +19,7 @@ namespace fs = std::filesystem;
 
 void usage(char* progname)
 {
-  std::cerr << "Usage: " << progname << " -e <experiment> -r <run> [-n <fetch_events>] [-p]" << std::endl
+  std::cerr << "Usage: " << progname << " -e <experiment> -r <run> [-d <det_name>] [-n <fetch_events>] [-p]" << std::endl
             << std::endl
             << R"a(
 Run some test processing on an epicsArch PV.
@@ -32,11 +32,12 @@ Or can change the number of open OpenMP threads by setting the environment varia
  - Set to 1 to run single threaded (`OMP_NUM_THREADS=1 [mpirun] ...`)
 
 Args:
-  -e <experiment> Experiment to process
-  -r    <run>     Run number to process
-  -n <fetch_evts> Number of offsets to read per fetch of .smd.xtc2 file.
- [-p]             Optionally print out the values of the PV.
- [-h]             Display this help message.)a";
+  -e <experiment>  Experiment to process
+  -r    <run>      Run number to process
+ [-d <det_name>  ] Detector name. Currently must be a PV returning a double.
+ [-n <fetch_evts>] Number of offsets to read per fetch of .smd.xtc2 file.
+ [-p]              Optionally print out the values of the PV.
+ [-h]              Display this help message.)a";
 }
 
 int main(int argc, char* argv[]) {
@@ -47,11 +48,15 @@ int main(int argc, char* argv[]) {
   bool print{false};
   std::string experiment;
   std::string run;
-  while ((c = getopt(argc, argv, "he:n:r:p")) != -1) {
+  std::string pv_detname{"laser_lib_mirror_y_2"};
+  while ((c = getopt(argc, argv, "hd:e:n:r:p")) != -1) {
     switch (c) {
     case 'h':
       usage(argv[0]);
       exit(0);
+    case 'd':
+      pv_detname = optarg;
+      break;
     case 'e':
       experiment = optarg;
       break;
@@ -84,7 +89,7 @@ int main(int argc, char* argv[]) {
 
     XTCPP::MPI::DataSource ds(experiment, run, events_per_read);
 
-    auto det = ds.detector("laser_lib_mirror_y_2");
+    auto det = ds.detector(pv_detname);
     std::chrono::time_point<std::chrono::steady_clock> load_end_time =
       std::chrono::steady_clock::now();
 
