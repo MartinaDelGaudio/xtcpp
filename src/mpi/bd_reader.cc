@@ -187,15 +187,15 @@ namespace XTCPP {
           m_curr_slow_update_index < m_num_slow_updates) {
         m_curr_slow_update_index++;
         size_t dgram_size = su_offset.size;
-        /* Sigh... For some reason transition sizes in .xtc2 and .smd.xtc2
-           files are different. See more comments in common/smd_reader.cc...
-           So if prev_l1_idx is -1, figure out the offset from the L1Accept
-           offset that follows...
-         */
         MPI_Offset file_offset;
         if (prev_l1_idx == -1) {
-          BDXtcOffset& l1_offset = m_offsets[offset_idx];
-          file_offset = l1_offset - dgram_size;
+          /* Sigh... For some reason transition sizes in .xtc2 and .smd.xtc2
+             files are different. See more comments in common/smd_reader.cc...
+             So if prev_l1_idx is -1, figure out the offset from the L1Accept
+             offset that follows...
+          */
+          BDXtcOffset& l1_offset = m_offsets[0];
+          file_offset = l1_offset.offset - dgram_size;
         } else {
           file_offset = su_offset.offset;
         }
