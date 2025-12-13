@@ -48,19 +48,24 @@ namespace XTCPP
    * entire XTC2 or a portion of it.
    * Note, the offset and size refer to the "big data" XTC2 files. They are
    * however, stored in the smalldata .smd.xtc2 files.
-   * These offsets are for the SlowUpdate transitions only.
+   * These offsets are for the transitions only.
    */
 #pragma pack(push, 1)
-  struct SlowUpdateXtcOffset {
-    SlowUpdateXtcOffset()
+  struct TransitionXtcOffset {
+    TransitionXtcOffset()
       : previous_l1_index(-1)
       , offset(0)
       , size(0)
+      , transition_id(XtcData::TransitionId::SlowUpdate)
     {}
-    SlowUpdateXtcOffset(int64_t prev_l1_idx_, uint64_t offset_, uint64_t size_)
+    TransitionXtcOffset(int64_t prev_l1_idx_,
+                        uint64_t offset_,
+                        uint64_t size_,
+                        XtcData::TransitionId::Value transition_id_ = XtcData::TransitionId::SlowUpdate)
       : previous_l1_index(prev_l1_idx_)
       , offset(offset_)
       , size(size_)
+      , transition_id(transition_id_)
     {}
 
     /**
@@ -71,6 +76,7 @@ namespace XTCPP
     int64_t previous_l1_index;
     uint64_t offset; ///< Offset in CORRESPONDING big data .xtc2 file for SlowUpdate
     uint64_t size; ///< Size of the SlowUpdate datagram
+    XtcData::TransitionId::Value transition_id;
   };
 #pragma pack(pop)
 
@@ -150,12 +156,12 @@ namespace XTCPP
        *
        * @param[in] offset_buf An external buffer that the BDXtcOffset objects
        *            will be constructed into.
-       * @param[in] slow_update_buf An external buffer that the SlowUpdate
+       * @param[in] transition_buf An external buffer that the SlowUpdate
        *            indices will be added into.
        * @return dgram The pointer to the next datagram.
        */
       XtcData::Dgram* get_offset_into(std::shared_ptr<BDXtcOffset[]> offset_buf,
-                                      std::shared_ptr<SlowUpdateXtcOffset[]> slow_update_buf);
+                                      std::shared_ptr<TransitionXtcOffset[]> transition_buf);
 
       /**
        * Construct the offset instance and return it.
@@ -207,6 +213,11 @@ namespace XTCPP
        */
       std::vector<std::string> epics_detnames() const { return m_epics_detnames; }
 
+      /**
+       * Whether an EndRun transition has been seen.
+       */
+      bool seen_end_run() const { return m_seen_end_run; }
+
     protected:
       virtual void init_file() {}
 
@@ -224,8 +235,8 @@ namespace XTCPP
       size_t m_events_per_read; ///< Max number of BDXtcOffset's to read at once
       size_t m_max_dgram_size; ///< Max datagram size for synchronous single reads
       size_t m_curr_offset_idx{0}; ///< Current index into BDXtcOffset buffer
-      size_t m_curr_slow_update_idx{0}; ///< Current index into SlowUpdateXtcOffset buffer
-      ssize_t m_num_l1s_seen{-1}; ///< Number of L1 indices passed.
+      size_t m_curr_transition_index{0}; ///< Current index into TransitionXtcOffset buffer
+      ssize_t m_last_l1_idx_seen{-1}; ///< Number of L1 indices passed.
       size_t m_file_offset{0}; ///< Offset in the file
 
       char* m_access_ptr; ///< Pointer to the buffer that has been read into
@@ -233,6 +244,8 @@ namespace XTCPP
       size_t m_file_size; ///< Total size of the .smd.xtc2 file
 
       size_t m_read_count{0}; ///< Number of bytes read on last read
+
+      bool m_seen_end_run{false}; ///< Whether an EndRun transition has been passed
 
       std::vector<std::string> m_detnames;
       std::map<std::string, std::vector<unsigned>> m_segment_nos;

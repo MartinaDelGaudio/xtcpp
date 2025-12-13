@@ -7,6 +7,7 @@
 #include "xtcdata/xtc/DescData.hh"
 #include "xtcdata/xtc/Dgram.hh"
 #include "xtcdata/xtc/NamesLookup.hh"
+#include "xtcdata/xtc/TransitionId.hh"
 
 #include "mpi.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
@@ -61,7 +62,8 @@ namespace XTCPP {
       }
 
       virtual std::expected<void, BDReadError>
-      read_slowupdate_at(size_t unwrapped_offset_idx) {
+      read_transition_at(size_t unwrapped_offset_idx,
+                         XtcData::TransitionId::Value transition_id = XtcData::TransitionId::SlowUpdate) {
         return std::unexpected(BDReadError::UnimplementedBaseFunction);
       }
 
@@ -144,9 +146,9 @@ namespace XTCPP {
       std::map<std::string, std::string> det_types() const { return m_det_types; }
 
       /**
-       * A pointer to the offsets being used to read datagrams.
+       * A pointer to the offsets being used to read L1Accept datagrams.
        */
-      std::shared_ptr<BDXtcOffset[]> offsets() const { return m_offsets; }
+      std::shared_ptr<BDXtcOffset[]> l1_offsets() const { return m_l1_offsets; }
 
       /**
        * The set of EPICS detector names (if any) in the file managed by this
@@ -180,7 +182,7 @@ namespace XTCPP {
       /**
        * The buffer used to hold `m_events_per_read` offsets in memory.
        */
-      std::shared_ptr<BDXtcOffset[]> m_offsets{nullptr};
+      std::shared_ptr<BDXtcOffset[]> m_l1_offsets{nullptr};
 
       /**
        * A shared buffer for holding indices for slow updates.
@@ -190,9 +192,9 @@ namespace XTCPP {
        * the offset index of 43.). This array is signed, because a value of -1
        * indicates that before the first L1Accept, there is a SlowUpdate.
        */
-      std::shared_ptr<SlowUpdateXtcOffset[]> m_slow_updates{nullptr};
-      size_t m_curr_slow_update_index{0};
-      size_t m_num_slow_updates;
+      std::shared_ptr<TransitionXtcOffset[]> m_transition_offsets{nullptr};
+      size_t m_curr_transition_index{0};
+      size_t m_num_transitions;
 
       size_t m_num_events; ///< Current number of events/offsets read
       XtcData::Xtc* m_payload_ptr; ///< Pointer to the data requested by get_data

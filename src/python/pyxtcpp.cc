@@ -66,18 +66,26 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
 
   py::class_<XTCPP::Base::Detector, std::shared_ptr<XTCPP::Base::Detector>>(
       m, "Detector")
-      .def(py::init(
-          [](std::string detname, std::string serial_no,
-             std::vector<unsigned> segment_nos,
-             std::vector<std::shared_ptr<XTCPP::Base::BDReader>> xtc_readers,
-             std::string experiment, std::string run, bool is_epics) {
-            return new XTCPP::Base::Detector(detname, serial_no, segment_nos,
-                                             xtc_readers, experiment, run,
-                                             is_epics);
+      .def(py::init([](std::string detname,
+                       std::string serial_no,
+                       std::vector<unsigned> segment_nos,
+                       std::vector<std::shared_ptr<XTCPP::Base::BDReader>> xtc_readers,
+                       std::string experiment,
+                       std::string run,
+                       bool is_epics,
+                       bool is_scan) {
+            return new XTCPP::Base::Detector(detname,
+                                             serial_no,
+                                             segment_nos,
+                                             xtc_readers,
+                                             experiment,
+                                             run,
+                                             is_epics,
+                                             is_scan);
           }))
       .def("raw", [](XTCPP::Base::Detector& self, size_t evt) {
         if (self.is_epics()) {
-          return self.get_slow_update_data(evt);
+          return self.get_transition_data(evt);
         } else {
           return self.get_l1_data(evt, "raw", "raw");
         }
@@ -104,7 +112,8 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
                      std::vector<std::shared_ptr<XTCPP::Base::BDReader>> xtc_readers,
                      std::string experiment,
                      std::string run,
-                     bool is_epics) {
+                     bool is_epics,
+                     bool is_scan) {
       MPI_Comm comm = MPI_Comm_f2c(comm_f);
       ///*
       return new XTCPP::MPI::Detector(comm,
@@ -114,11 +123,12 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
                                       xtc_readers,
                                       experiment,
                                       run,
-                                      is_epics);
+                                      is_epics,
+                                      is_scan);
     }))
     .def("raw", [](XTCPP::MPI::Detector& self, size_t evt) {
       if (self.is_epics()) {
-		    return self.get_slow_update_data(evt);
+		    return self.get_transition_data(evt);
       } else {
         return self.get_l1_data(evt, "raw", "raw");
       }

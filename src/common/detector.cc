@@ -112,7 +112,8 @@ namespace XTCPP {
                        std::vector<std::shared_ptr<BDReader>> xtc_readers,
                        std::string experiment,
                        std::string run,
-                       bool is_epics)
+                       bool is_epics,
+                       bool is_scan)
       : m_detname(detname)
       , m_serial_no(serial_no)
       , m_det_type(xtc_readers[0]->det_types()[m_detname])
@@ -124,6 +125,7 @@ namespace XTCPP {
       , m_data_sizes(m_segment_nos.size())
       , m_calib_data(32*512*1024)
       , m_is_epics(is_epics)
+      , m_is_scan(is_scan)
     {
       if (auto tmp = spdlog::get("Base::Detector")) {
         m_logger = tmp;
@@ -441,14 +443,14 @@ namespace XTCPP {
       return (this->*get_l1_data_impl)(offset_idx, alg, data_name);
     }
 
-    void* Detector::get_slow_update_data(size_t offset_idx) {
+    void* Detector::get_transition_data(size_t offset_idx) {
       if (!m_is_epics) {
         m_logger->warn("This function is for EPICS detectors! Use get_l1_data instead.");
         return nullptr;
       }
       for (auto& reader : m_xtc_readers) {
         std::expected<void, BDReadError> ret;
-        ret = reader->read_slowupdate_at(offset_idx);
+        ret = reader->read_transition_at(offset_idx);
         if (ret.has_value()) {
           // Data is stored under "epics" detector. The algorithm
           // is always "raw" and the field name is the PV name - our m_detname

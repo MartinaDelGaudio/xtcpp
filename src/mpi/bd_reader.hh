@@ -6,6 +6,7 @@
 #include "xtcdata/xtc/DescData.hh"
 #include "xtcdata/xtc/Dgram.hh"
 #include "xtcdata/xtc/NamesLookup.hh"
+#include "xtcdata/xtc/TransitionId.hh"
 
 #include "mpi.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
@@ -35,7 +36,8 @@ namespace XTCPP {
       get_next_offsets() override;
 
       virtual std::expected<void, BDReadError>
-      read_slowupdate_at(size_t unwrapped_offset_idx) override;
+      read_transition_at(size_t unwrapped_offset_idx,
+                         XtcData::TransitionId::Value transition_id = XtcData::TransitionId::SlowUpdate) override;
 
       virtual std::expected<void, BDReadError>
       read_l1_at(size_t unwrapped_offset_idx) override;
@@ -63,14 +65,14 @@ namespace XTCPP {
       int m_n_shmem_ranks;
 
       MPI_Win m_offset_win;
-      MPI_Win m_slow_update_idx_win;
-      MPI_Win m_slow_update_dgram_win;
+      MPI_Win m_transition_idx_win;
+      MPI_Win m_transition_dgram_win;
 
       char* m_dgram_buf;
       char* m_dgram_buf0;
       char* m_dgram_buf1;
 
-      char* m_slow_update_dgram_buf;
+      char* m_transition_dgram_buf;
 
       char* m_read_ptr;
       char* m_access_ptr;

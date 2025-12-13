@@ -73,7 +73,8 @@ namespace XTCPP {
                std::vector<std::shared_ptr<BDReader>> xtc_readers,
                std::string experiment,
                std::string run,
-               bool is_epics);
+               bool is_epics,
+               bool is_scan);
 
       /**
        * Retrieve the datagram at an offset index.
@@ -113,7 +114,7 @@ namespace XTCPP {
        * @param[in] offset_idx The index (i.e. event) to retrieve data for.
        * @return data The pointer to the requested SlowUpdate data.
        */
-      virtual void* get_slow_update_data(size_t offset_idx);
+      virtual void* get_transition_data(size_t offset_idx);
 
       /**
        * Access the calibration constants.
@@ -156,6 +157,11 @@ namespace XTCPP {
        * Whether this is an "EPICS" detector or not.
        */
       bool is_epics() const { return m_is_epics; }
+
+      /**
+       * Whether this is a scan detector or not.
+       */
+      bool is_scan() const { return m_is_scan; }
 
     protected:
       /**
@@ -250,6 +256,13 @@ namespace XTCPP {
        * up front makes it simpler long term.
        */
       bool m_is_epics{false};
+
+      /**
+       * Whether this is a scan detector or not. Like the EPICS detector
+       * the "scan" detector must read transition data instead of L1Accepts
+       * so the access mechanism is different.
+       */
+      bool m_is_scan{false};
 
       std::shared_ptr<spdlog::logger> m_logger; ///< Logger
 

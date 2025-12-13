@@ -4,10 +4,8 @@
 #include "common/smd_reader.hh"
 #include "mpi/smd_reader.hh"
 
-#include "xtcdata/xtc/DescData.hh"
 #include "xtcdata/xtc/Dgram.hh"
-#include "xtcdata/xtc/NamesLookup.hh"
-#include "xtcdata/xtc/ShapesData.hh"
+#include "xtcdata/xtc/TransitionId.hh"
 
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
@@ -60,34 +58,34 @@ namespace XTCPP {
       MPI_Comm_size(m_shmem_comm, &m_n_shmem_ranks);
 
       size_t offset_window_size{0};
-      size_t slow_update_idx_window_size{0};
-      size_t slow_update_dgram_window_size{0};
+      size_t transition_idx_window_size{0};
+      size_t transition_dgram_window_size{0};
       if (m_shmem_rank == 0) {
         offset_window_size = sizeof(BDXtcOffset)*m_events_per_read;
         // Wasteful to allocate so much, but we don't know how many...
-        slow_update_idx_window_size = sizeof(SlowUpdateXtcOffset)*m_events_per_read;
-        slow_update_dgram_window_size = 0x4000000;
+        transition_idx_window_size = sizeof(TransitionXtcOffset)*m_events_per_read;
+        transition_dgram_window_size = 0x4000000;
       }
       MPI_Win_allocate_shared(offset_window_size,
                               sizeof(BDXtcOffset),
                               MPI_INFO_NULL,
                               m_shmem_comm,
-                              &m_offsets,
+                              &m_l1_offsets,
                               &m_offset_win);
 
-      MPI_Win_allocate_shared(slow_update_idx_window_size,
-                              sizeof(SlowUpdateXtcOffset),
+      MPI_Win_allocate_shared(transition_idx_window_size,
+                              sizeof(TransitionXtcOffset),
                               MPI_INFO_NULL,
                               m_shmem_comm,
-                              &m_slow_updates,
-                              &m_slow_update_idx_win);
+                              &m_transition_offsets,
+                              &m_transition_idx_win);
 
-      MPI_Win_allocate_shared(slow_update_dgram_window_size,
+      MPI_Win_allocate_shared(transition_dgram_window_size,
                               sizeof(char),
                               MPI_INFO_NULL,
                               m_shmem_comm,
-                              &m_slow_update_dgram_buf,
-                              &m_slow_update_dgram_win);
+                              &m_transition_dgram_buf,
+                              &m_transition_dgram_win);
 
       if (m_shmem_rank != 0) {
         MPI_Aint query_size;
@@ -96,19 +94,19 @@ namespace XTCPP {
                              0,
                              &query_size,
                              &disp_unit,
-                             &m_offsets);
+                             &m_l1_offsets);
 
-        MPI_Win_shared_query(m_slow_update_idx_win,
+        MPI_Win_shared_query(m_transition_idx_win,
                              0,
                              &query_size,
                              &disp_unit,
-                             &m_slow_updates);
+                             &m_transition_offsets);
 
-        MPI_Win_shared_query(m_slow_update_dgram_win,
+        MPI_Win_shared_query(m_transition_dgram_win,
                              0,
                              &query_size,
                              &disp_unit,
-                             &m_slow_update_dgram_win);
+                             &m_transition_dgram_win);
       }
 
       // We don't care about the dgram (configure) but the read populates the attributes
@@ -146,47 +144,77 @@ namespace XTCPP {
       MPI_Win_lock_all(0, m_offset_win);
       if (m_shmem_rank == 0) {
         size_t n_events {0};
-        size_t n_slow_updates {0};
+        size_t n_transitions {0};
         auto ret = m_smd_reader->wait();
         if (ret.has_value()) {
           while (n_events < m_events_per_read) {
-            XtcData::Dgram* dg = m_smd_reader->get_offset_into(m_offsets,
-                                                               m_slow_updates);
+            XtcData::Dgram* dg = m_smd_reader->get_offset_into(m_l1_offsets,
+                                                               m_transition_offsets);
             if (!dg) {
               break;
             }
             if (dg->service() == XtcData::TransitionId::L1Accept) {
               n_events++;
-            } else if (dg->service() == XtcData::TransitionId::SlowUpdate) {
-              n_slow_updates++;
+            //} else if (dg->service() == XtcData::TransitionId::SlowUpdate) {
+            } else {
+              n_transitions++;
             }
           }
           m_smd_reader->iread();
           m_num_events = n_events;
-          m_num_slow_updates = n_slow_updates;
-          m_logger->info("Read " + std::to_string(m_num_events) + " offsets (W/ " +
-                         std::to_string(m_num_slow_updates) + " slow updates)");
+          m_num_transitions = n_transitions;
+          m_logger->info("Read " + std::to_string(m_num_events) + " L1Accept offsets (and " +
+                         std::to_string(m_num_transitions) + " transition offsets)");
         } else if (ret.error() == SMDReadError::ZeroBytesRead) {
           m_num_events = 0;
+          m_num_transitions = 0;
         } else {
           /// Handle errors...
         }
       }
       MPI_Win_sync(m_offset_win);
       MPI_Bcast(&m_num_events, 1, MPI_UNSIGNED_LONG_LONG, 0, m_shmem_comm);
-      MPI_Bcast(&m_num_slow_updates, 1, MPI_LONG_LONG, 0, m_shmem_comm);
+      MPI_Bcast(&m_num_transitions, 1, MPI_LONG_LONG, 0, m_shmem_comm);
       MPI_Win_unlock_all(m_offset_win);
       return m_num_events;
     }
+    /**
+     * Logic:
+     * if prev_l1_idx is -1 that means the transition has come before an L1Accept
+     *   - If looking for SlowUpdate, this can only possibly be DIRECTLY before
+     *     an L1Accept. I.e. you have this SlowUpdate and then the L1Accept
+     *     --> As such, you can calculate the offset to read at by looking at the
+     *         offset of the L1Accept that comes next, and subtracting the size
+     *         of the SlowUpdate transition.
+     *
+     *   - If looking for a BeginStep, this does not necessarily come directly
+     *     before the L1Accept. I.e. you may have BeginStep > SlowUpdate > L1Accept
+     *     as an example. Therefore, to figure out the offset to read at you must
+     *     take the offset of the first L1Accept, and then iterate through the
+     *     transitions between the one you want and that L1Accept. Subtracting
+     *     the size of all those datagrams (including the one you want to get)
+     *     from the L1Accept offset will give you the file offset.
+     *
+     * NOTE: The logic works for all transitions EXCEPT configure transitions.
+     *      The sizes recorded in the TransitionXtcOffset structs are from the
+     *      .smd.xtc2 file provided by SMDReader. For all transitions they are
+     *      equivalent to the sizes in the .xtc2 file, except for Configure
+     *      transitions for reasons I do not understand.
+     */
 
     std::expected<void, BDReadError>
-    BDReader::read_slowupdate_at(size_t unwrapped_offset_idx) {
-      SlowUpdateXtcOffset su_offset = m_slow_updates[m_curr_slow_update_index];
-      ssize_t prev_l1_idx = su_offset.previous_l1_index;
+    BDReader::read_transition_at(size_t unwrapped_offset_idx,
+                                 XtcData::TransitionId::Value transition_id) {
+      TransitionXtcOffset transition_offset = m_transition_offsets[m_curr_transition_index];
+      while (transition_offset.transition_id != transition_id) {
+        m_curr_transition_index++;
+        transition_offset = m_transition_offsets[m_curr_transition_index];
+      }
+      ssize_t prev_l1_idx = transition_offset.previous_l1_index;
       if (prev_l1_idx <= static_cast<ssize_t>(unwrapped_offset_idx) &&
-          m_curr_slow_update_index < m_num_slow_updates) {
-        m_curr_slow_update_index++;
-        size_t dgram_size = su_offset.size;
+          m_curr_transition_index < m_num_transitions) {
+        m_curr_transition_index++;
+        size_t dgram_size = transition_offset.size;
         MPI_Offset file_offset;
         if (prev_l1_idx == -1) {
           /* Sigh... For some reason transition sizes in .xtc2 and .smd.xtc2
@@ -194,14 +222,25 @@ namespace XTCPP {
              So if prev_l1_idx is -1, figure out the offset from the L1Accept
              offset that follows...
           */
-          BDXtcOffset& l1_offset = m_offsets[0];
-          file_offset = l1_offset.offset - dgram_size;
+          BDXtcOffset& l1_offset = m_l1_offsets[0];
+          size_t total_offset_from_l1 = dgram_size;
+          // Check to see if there are other transitions between the one of interest
+          // and the first L1Accept - if so must subtract their size from the offset
+          // as well
+          size_t transition_index = m_curr_transition_index;
+          TransitionXtcOffset next_transition_offset = m_transition_offsets[transition_index];
+          while (next_transition_offset.previous_l1_index == -1) {
+            total_offset_from_l1 += next_transition_offset.size;
+            transition_index++;
+            next_transition_offset = m_transition_offsets[transition_index];
+          }
+          file_offset = l1_offset.offset - total_offset_from_l1;
         } else {
-          file_offset = su_offset.offset;
+          file_offset = transition_offset.offset;
         }
 
-        XtcData::Dgram* dg = reinterpret_cast<XtcData::Dgram*>(m_slow_update_dgram_buf);
-        MPI_Win_lock_all(0, m_slow_update_dgram_win);
+        XtcData::Dgram* dg = reinterpret_cast<XtcData::Dgram*>(m_transition_dgram_buf);
+        MPI_Win_lock_all(0, m_transition_dgram_win);
         if (m_shmem_rank == 0) {
           MPI_Status status;
           std::memset(&status, 0, sizeof(MPI_Status));
@@ -231,8 +270,8 @@ namespace XTCPP {
             return std::unexpected(BDReadError::GeneralIOError);
           }
         }
-        MPI_Win_sync(m_slow_update_dgram_win);
-        MPI_Win_unlock_all(m_slow_update_dgram_win);
+        MPI_Win_sync(m_transition_dgram_win);
+        MPI_Win_unlock_all(m_transition_dgram_win);
         m_payload_ptr = reinterpret_cast<XtcData::Xtc*>(dg->xtc.payload());
         m_remaining_payload = dg->xtc.sizeofPayload();
       }
@@ -245,7 +284,7 @@ namespace XTCPP {
       if (offset_idx >= m_num_events) {
         return std::unexpected(BDReadError::AllDgramOffsetsRead);
       }
-      BDXtcOffset& offset = m_offsets[offset_idx];
+      BDXtcOffset& offset = m_l1_offsets[offset_idx];
 
       XtcData::Dgram* dg = reinterpret_cast<XtcData::Dgram*>(m_dgram_buf);
       MPI_Status status;
@@ -286,7 +325,7 @@ namespace XTCPP {
       if (offset_idx >= m_num_events) {
         return std::unexpected(BDReadError::AllDgramOffsetsRead);
       }
-      BDXtcOffset& offset = m_offsets[offset_idx];
+      BDXtcOffset& offset = m_l1_offsets[offset_idx];
 
       XtcData::Dgram* dg = reinterpret_cast<XtcData::Dgram*>(m_read_ptr);
 

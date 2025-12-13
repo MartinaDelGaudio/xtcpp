@@ -167,7 +167,8 @@ namespace XTCPP {
                                                                        det_readers,
                                                                        m_experiment,
                                                                        m_run,
-                                                                       is_epics);
+                                                                       is_epics,
+                                                                       false);
       return det;
     }
 

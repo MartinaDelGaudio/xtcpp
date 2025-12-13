@@ -132,7 +132,7 @@ namespace XTCPP {
     }
 
     XtcData::Dgram* SMDReader::get_offset_into(std::shared_ptr<BDXtcOffset[]> external_buf,
-                                               std::shared_ptr<SlowUpdateXtcOffset[]> slow_update_buf) {
+                                               std::shared_ptr<TransitionXtcOffset[]> transition_buf) {
       XtcData::Dgram& dg = *reinterpret_cast<XtcData::Dgram*>(m_access_ptr + m_access_offset);
       size_t payload_size = dg.xtc.sizeofPayload();
       if (payload_size > static_cast<size_t>(m_file_size)) {
@@ -141,16 +141,17 @@ namespace XTCPP {
 
       if (dg.service() == XtcData::TransitionId::L1Accept) {
         extract_offset_from_dgram_into(&dg.xtc, external_buf);
-        m_num_l1s_seen++;
-      } else if (dg.service() == XtcData::TransitionId::SlowUpdate) {
-        m_curr_slow_update_idx = m_curr_slow_update_idx % m_events_per_read;
+        m_last_l1_idx_seen++;
+      //} else if (dg.service() == XtcData::TransitionId::SlowUpdate) {
+      } else {
+        m_curr_transition_index = m_curr_transition_index % m_events_per_read;
         uint64_t size = sizeof(dg) + payload_size;
         // Get the current offset. We've read m_read_count and updated m_file_offset
         // So to find the offset of the datagram revert m_file_offset by bytes read
         // and then add in the offset we are currently at.
 
         uint64_t offset;
-        if (m_num_l1s_seen < 0) {
+        if (m_last_l1_idx_seen < 0) {
           // Have seen nothing but transitions... Then the smd file_offset can be used
           // This is because entire transitions are also stored in .smd.xtc2 files
           // If we have yet to see an L1Accept, then the offset in .smd.xtc2 is equal
@@ -172,9 +173,13 @@ namespace XTCPP {
           BDXtcOffset prev_l1 = external_buf[m_events_per_read-1];
           offset = prev_l1.offset + prev_l1.size;
         }
-        new (slow_update_buf.get() + m_curr_slow_update_idx)
-            SlowUpdateXtcOffset(m_num_l1s_seen, offset, size);
-        m_curr_slow_update_idx++;
+        new (transition_buf.get() + m_curr_transition_index)
+          TransitionXtcOffset(m_last_l1_idx_seen, offset, size, dg.service());
+        m_curr_transition_index++;
+
+        if (dg.service() == XtcData::TransitionId::EndRun) {
+          m_seen_end_run = true;
+        }
       }
       m_access_offset += sizeof(dg) + payload_size;
       return &dg;

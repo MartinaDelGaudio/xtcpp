@@ -25,14 +25,16 @@ namespace XTCPP {
                        std::vector<std::shared_ptr<Base::BDReader>> xtc_readers,
                        std::string experiment,
                        std::string run,
-                       bool is_epics)
+                       bool is_epics,
+                       bool is_scan)
       : Base::Detector(detname,
                        serial_no,
                        segment_nos,
                        xtc_readers,
                        experiment,
                        run,
-                       is_epics)
+                       is_epics,
+                       is_scan)
       , m_comm(comm)
     {
       if (!m_is_epics) {

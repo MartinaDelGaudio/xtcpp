@@ -28,7 +28,8 @@ namespace XTCPP {
                std::vector<std::shared_ptr<Base::BDReader>> xtc_readers,
                std::string experiment,
                std::string run,
-               bool is_epics);
+               bool is_epics,
+               bool is_scan);
 
       XtcData::Dgram* operator()(size_t offset_idx);
 

@@ -97,7 +97,7 @@ int main(int argc, char* argv[]) {
     int n_events{0};
 
     for (auto it=ds.begin(); it != ds.end(); it++) {
-      auto raw_det  = det->get_slow_update_data(*it);
+      auto raw_det  = det->get_transition_data(*it);
       if (print) {
         std::cout << "Value is: " << *reinterpret_cast<double*>(raw_det) << std::endl;
       }
