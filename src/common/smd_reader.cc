@@ -1,6 +1,5 @@
 #include "common/smd_reader.hh"
 
-#include "smd_reader.hh"
 #include "xtcdata/xtc/DescData.hh"
 #include "xtcdata/xtc/NamesLookup.hh"
 #include "xtcdata/xtc/ShapesData.hh"
@@ -84,6 +83,25 @@ namespace XTCPP {
           det_alg_map.try_emplace(alg.name(), det_seg_map_tmp);
           auto& det_seg_map = det_alg_map[alg.name()];
           det_seg_map.try_emplace(seg_no, XtcData::NameIndex(names));
+
+          if (m_det_algs.find(detname) != m_det_algs.end()) {
+            m_det_algs[detname].push_back(alg.name());
+          } else {
+            m_det_algs[detname] = {alg.name()};
+          }
+
+          std::vector<std::string> fields;
+          for (size_t i = 0; i < names.num(); ++i) {
+            fields.push_back(names.get(i).name());
+          }
+          if (m_det_alg_fields.find(detname) != m_det_alg_fields.end()) {
+            auto& alg_fields = m_det_alg_fields[detname];
+            alg_fields[alg.name()] = fields;
+          } else {
+            std::map<std::string,std::vector<std::string>> alg_fields;
+            alg_fields[alg.name()] = fields;
+            m_det_alg_fields[detname] = alg_fields;
+          }
         }
         XtcData::NamesId& names_id = names.namesId();
         m_names_lookup[names_id] = XtcData::NameIndex(names);

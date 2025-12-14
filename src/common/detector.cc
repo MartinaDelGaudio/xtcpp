@@ -3,6 +3,7 @@
 #include "common/bd_reader.hh"
 
 #include "xtcdata/xtc/Dgram.hh"
+#include "xtcdata/xtc/TransitionId.hh"
 
 #include "httplib.h"
 #include "rapidjson/document.h"
@@ -143,6 +144,10 @@ namespace XTCPP {
         get_l1_data_impl = &Detector::get_l1_data_sequential;
         m_thread_pool = std::nullopt;
       }
+
+      auto& reader = m_xtc_readers[0];
+      m_det_algs = reader->det_algs()[m_detname];
+      m_det_alg_fields = reader->det_alg_fields()[m_detname];
     }
 
     void Detector::load_all_calib_constants() {
@@ -426,7 +431,7 @@ namespace XTCPP {
       }
     }
 
-    XtcData::Dgram* Detector::operator()(size_t offset_idx) {
+    const XtcData::Dgram* const Detector::operator()(size_t offset_idx) {
       auto& reader = m_xtc_readers[0];
       auto ret = reader->read_l1_at(offset_idx);
       if (ret.has_value()) {
@@ -443,39 +448,87 @@ namespace XTCPP {
       return (this->*get_l1_data_impl)(offset_idx, alg, data_name);
     }
 
-    void* Detector::get_transition_data(size_t offset_idx) {
-      if (!m_is_epics) {
-        m_logger->warn("This function is for EPICS detectors! Use get_l1_data instead.");
+    void* Detector::get_scan_data(size_t offset_idx,
+                                  const std::string& alg,
+                                  const std::string& data_name) {
+      // Scan will on BeginStep contain:
+      // - `step_value` -- INT64
+      // - `step_docstring` -- CHARSTR (maybe - always does, but not actually required)
+      // - `scan_var_namexxx` -- This is the name of the variable scanned
+      //   - May have multiple
+      //   - E.g. `lens_h`, `lxt` etc..
+      // *** EndStep will not have any data in it
+      if (!m_is_scan) {
+        m_logger->warn(
+            "This function is for the scan detector! "
+            "Use get_l1_data/get_slow_update_data instead.");
         return nullptr;
       }
-      for (auto& reader : m_xtc_readers) {
+      auto& reader = m_xtc_readers[0]; // Only 1 -- The same as timing detector
+      bool have_data {false};
+      if (m_last_index_read == static_cast<ssize_t>(offset_idx)) {
+        have_data = true;
+      } else {
+        std::expected<void, BDReadError> ret;
+        ret = reader->read_transition_at(offset_idx, XtcData::TransitionId::BeginStep);
+        have_data = ret.has_value();
+      }
+      if (have_data) {
+        m_last_index_read = static_cast<ssize_t>(offset_idx);
+        std::vector<unsigned> reader_seg_nos =
+            reader->segment_numbers()["scan"];
+        unsigned seg_no = reader_seg_nos[0]; // There should only be 1
+        auto [data_ptr, data_size] =
+          reader->get_data(m_detname, seg_no, alg, data_name);
+        m_data_ptrs[seg_no] = data_ptr;
+        m_data_sizes[seg_no] = data_size;
+      } else {
+        // Handle errors?
+        return nullptr;
+      }
+      return m_data_ptrs[0];
+    }
+
+    void* Detector::get_slow_update_data(size_t offset_idx) {
+      if (!m_is_epics) {
+        m_logger->warn("This function is for EPICS detectors! "
+                       "Use get_l1_data/get_scan_data instead.");
+        return nullptr;
+      }
+      auto& reader = m_xtc_readers[0]; // Only 1
+      bool have_data {false};
+      if (m_last_index_read == static_cast<ssize_t>(offset_idx)) {
+        have_data = true;
+      } else {
         std::expected<void, BDReadError> ret;
         ret = reader->read_transition_at(offset_idx);
-        if (ret.has_value()) {
-          // Data is stored under "epics" detector. The algorithm
-          // is always "raw" and the field name is the PV name - our m_detname
-          std::vector<unsigned> reader_seg_nos =
-            reader->segment_numbers()["epics"];
-          unsigned seg_no = reader_seg_nos[0]; // There should only be 1
-          std::string epics_detname{"epics"};
-          std::string epics_alg{"raw"};
-          std::string pv_name{m_detname};
-          auto [data_ptr, data_size] =
-            reader->get_data(epics_detname, seg_no, epics_alg, pv_name);
+        have_data = ret.has_value();
+      }
+      if (have_data) {
+        m_last_index_read = static_cast<ssize_t>(offset_idx);
+        // Data is stored under "epics" detector. The algorithm
+        // is always "raw" and the field name is the PV name - our m_detname
+        std::vector<unsigned> reader_seg_nos =
+          reader->segment_numbers()["epics"];
+        unsigned seg_no = reader_seg_nos[0]; // There should only be 1
+        std::string epics_detname{"epics"};
+        std::string epics_alg{"raw"};
+        std::string pv_name{m_detname};
+        auto [data_ptr, data_size] =
+          reader->get_data(epics_detname, seg_no, epics_alg, pv_name);
 
-          m_data_ptrs[seg_no] = data_ptr;
-          m_data_sizes[seg_no] = data_size;
-        } else {
-          // Handle errors?
-          return nullptr;
-        }
+        m_data_ptrs[seg_no] = data_ptr;
+        m_data_sizes[seg_no] = data_size;
+      } else {
+        // Handle errors?
+        return nullptr;
       }
       return m_data_ptrs[0];
     }
 
     void* Detector::get_l1_data_threaded(size_t offset_idx,
-                                      const std::string& alg,
-                                      const std::string& data_name) {
+                                         const std::string& alg,
+                                         const std::string& data_name) {
       /*
         m_logger->trace("Getting data for algorithm {} and field {} at offset idx {}",
         alg,
@@ -483,6 +536,7 @@ namespace XTCPP {
         offset_idx);
       */
 
+      // TODO: Setup conditional on m_last_index_read to prevent reading multiple times
       auto read_func = [&](std::shared_ptr<Base::BDReader> reader) -> void {
         auto ret = reader->read_l1_at(offset_idx);
         if (ret.has_value()) {
@@ -523,6 +577,7 @@ namespace XTCPP {
                         data_name,
                         offset_idx);
       */
+      // TODO: Setup conditional on m_last_index_read to prevent reading multiple times
       // Launch all read asynchronously
       for (auto& reader : m_xtc_readers) {
         std::expected<void, BDReadError> ret = ret = reader->iread_l1_at(offset_idx);

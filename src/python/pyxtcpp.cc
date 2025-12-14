@@ -85,7 +85,9 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
           }))
       .def("raw", [](XTCPP::Base::Detector& self, size_t evt) {
         if (self.is_epics()) {
-          return self.get_transition_data(evt);
+          return self.get_slow_update_data(evt);
+        } else if (self.is_scan()) {
+          return self.get_scan_data(evt, "raw", "step_value");
         } else {
           return self.get_l1_data(evt, "raw", "raw");
         }
@@ -128,7 +130,9 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
     }))
     .def("raw", [](XTCPP::MPI::Detector& self, size_t evt) {
       if (self.is_epics()) {
-		    return self.get_transition_data(evt);
+		    return self.get_slow_update_data(evt);
+      } else if (self.is_scan()) {
+        return self.get_scan_data(evt, "raw", "step_value");
       } else {
         return self.get_l1_data(evt, "raw", "raw");
       }

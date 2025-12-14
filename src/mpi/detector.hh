@@ -31,8 +31,6 @@ namespace XTCPP {
                bool is_epics,
                bool is_scan);
 
-      XtcData::Dgram* operator()(size_t offset_idx);
-
     private:
       MPI_Comm m_comm;
       int m_rank;

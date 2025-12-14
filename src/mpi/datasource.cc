@@ -92,14 +92,20 @@ namespace XTCPP {
 
     std::shared_ptr<Base::Detector> DataSource::detector(std::string detname) {
       bool is_epics {false};
-      if (m_l1_xtc_readers.find(detname) == m_l1_xtc_readers.end()) {
+      bool is_scan {false};
+      if (detname == "scan") {
+        is_scan = true;
+      } else if (m_l1_xtc_readers.find(detname) == m_l1_xtc_readers.end()) {
         if (m_epics_xtc_readers.find(detname) == m_epics_xtc_readers.end()) {
           throw std::runtime_error("Unknown detector type " + detname + "!");
         }
         is_epics = true;
       }
       std::vector<std::shared_ptr<Base::BDReader>> det_readers;
-      if (is_epics) {
+      if (is_scan) {
+        // The scan detector will be in the same file as the timing detector
+        det_readers = m_l1_xtc_readers[detname];
+      } else if (is_epics) {
         det_readers = m_epics_xtc_readers[detname];
       } else {
         det_readers = m_l1_xtc_readers[detname];
@@ -145,6 +151,8 @@ namespace XTCPP {
           }
 
           m_xtc_readers_in_use.push_back(det_reader);
+          m_logger->trace("Detector " + detname + " will read " + det_reader->xtc_path() +
+                          " and " + det_reader->smd_path());
         } else {
           // Handle errors?
         }
@@ -168,7 +176,7 @@ namespace XTCPP {
                                                                        m_experiment,
                                                                        m_run,
                                                                        is_epics,
-                                                                       false);
+                                                                       is_scan);
       return det;
     }
 

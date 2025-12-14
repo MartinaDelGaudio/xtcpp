@@ -85,13 +85,16 @@ namespace XTCPP {
        * @return dgram The pointer to the datagram. May be a nullptr if no more data,
        *               not found, etc.
        */
-      XtcData::Dgram* operator()(size_t offset_idx);
+      const XtcData::Dgram* const operator()(size_t offset_idx);
 
       /**
        * Return the data associated with a specific "algorithm" and field name
        * for the specified offset index.
        * This function searches for L1Accept data which is applicable to all
-       * detectors *except* EPICS (epicsArch).
+       * detectors *except* EPICS (epicsArch) and the scan detector.
+       *
+       * NOTE: The algorithm and field names to use can be retrieved using the
+       *      `algs` and `alg_fields` functions.
        *
        * @param[in] offset_idx The index (i.e. event) to retrieve data for.
        * @param[in] alg The algorithm, e.g. `raw`.
@@ -102,7 +105,9 @@ namespace XTCPP {
        *              an unstructured pointer to the underlying set of pointers for
        *              potentially many segments.
        */
-      virtual void* get_l1_data(size_t offset_idx, const std::string& alg, const std::string& data_name);
+      virtual void* get_l1_data(size_t offset_idx,
+                                const std::string& alg,
+                                const std::string& data_name);
 
       /**
        * Return the closest SlowUpdate data to the offset index.
@@ -114,7 +119,28 @@ namespace XTCPP {
        * @param[in] offset_idx The index (i.e. event) to retrieve data for.
        * @return data The pointer to the requested SlowUpdate data.
        */
-      virtual void* get_transition_data(size_t offset_idx);
+      virtual void* get_slow_update_data(size_t offset_idx);
+
+      /**
+       * Return the closest scan step data to the offset index.
+       * This data is encoded in BeginStep transitions which is why the
+       * interface is independent of the `get_l1_data` function.
+       *
+       * In general, scan data will always have a `step_value` field to access
+       * and will usually also have a `step_docstring` field (although this is
+       * not strictly required.) The detector uses the `raw` algorithm currently.
+       * The rest of the fields are the scanned variables and will depend on the
+       * scan performed. The functions `algs` and `alg_fields` can be used to
+       * determine the names of these fields.
+       *
+       * @param[in] offset_idx The index (i.e. event) to retrieve data for.
+       * @param[in] alg The algorithm, usually (if not always) `raw`.
+       * @param[in] data_name The field/data name within the algorithm.
+       * @return data The pointer to the requested scan data.
+       */
+      virtual void* get_scan_data(size_t offset_idx,
+                                  const std::string& alg,
+                                  const std::string& data_name);
 
       /**
        * Access the calibration constants.
@@ -162,6 +188,16 @@ namespace XTCPP {
        * Whether this is a scan detector or not.
        */
       bool is_scan() const { return m_is_scan; }
+
+      /**
+       * The algorithms implemented by the detector.
+       */
+      std::vector<std::string> algs() const { return m_det_algs; }
+
+      /**
+       * A mapping of field names to the various algorithms.
+       */
+      std::map<std::string, std::vector<std::string>> alg_fields() const { return m_det_alg_fields; }
 
     protected:
       /**
@@ -263,6 +299,23 @@ namespace XTCPP {
        * so the access mechanism is different.
        */
       bool m_is_scan{false};
+
+      /**
+       * The algorithms implemented by the detector.
+       */
+      std::vector<std::string> m_det_algs;
+
+      /**
+       * A mapping of field names to the various algorithms.
+       */
+      std::map<std::string, std::vector<std::string>> m_det_alg_fields;
+
+      /**
+       * Keeps track of the last index data was read for. Since a `get_data_..`
+       * function may be called multiple times for different alg/fields we only
+       * want to read the actual data from disk once.
+       */
+      ssize_t m_last_index_read {-1};
 
       std::shared_ptr<spdlog::logger> m_logger; ///< Logger
 

@@ -19,10 +19,10 @@ namespace fs = std::filesystem;
 
 void usage(char* progname)
 {
-  std::cerr << "Usage: " << progname << " -e <experiment> -r <run> [-d <det_name>] [-n <fetch_events>] [-p]" << std::endl
+  std::cerr << "Usage: " << progname << " -e <experiment> -r <run> [-n <fetch_events>] [-p]" << std::endl
             << std::endl
             << R"a(
-Run some test processing on an epicsArch PV.
+Run some test reads of the "scan" detector.
 
 Can also be run with MPI
   - `mpirun -np <NUM PROCS> ...
@@ -34,7 +34,6 @@ Or can change the number of open OpenMP threads by setting the environment varia
 Args:
   -e <experiment>  Experiment to process
   -r    <run>      Run number to process
- [-d <det_name>  ] Detector name. Currently must be a PV returning a double.
  [-n <fetch_evts>] Number of offsets to read per fetch of .smd.xtc2 file.
  [-p]              Optionally print out the values of the PV.
  [-h]              Display this help message.)a";
@@ -48,15 +47,11 @@ int main(int argc, char* argv[]) {
   bool print{false};
   std::string experiment;
   std::string run;
-  std::string pv_detname{"laser_lib_mirror_y_2"};
-  while ((c = getopt(argc, argv, "hd:e:n:r:p")) != -1) {
+  while ((c = getopt(argc, argv, "he:n:r:p")) != -1) {
     switch (c) {
     case 'h':
       usage(argv[0]);
       exit(0);
-    case 'd':
-      pv_detname = optarg;
-      break;
     case 'e':
       experiment = optarg;
       break;
@@ -89,17 +84,33 @@ int main(int argc, char* argv[]) {
 
     XTCPP::MPI::DataSource ds(experiment, run, events_per_read);
 
-    auto det = ds.detector(pv_detname);
+    std::string scan_detector_name {"scan"};
+    auto scan_det = ds.detector(scan_detector_name);
     std::chrono::time_point<std::chrono::steady_clock> load_end_time =
       std::chrono::steady_clock::now();
+
+    std::cout << "Scan detector has algorithms: ";
+    for (auto& alg_name : scan_det->algs()) {
+      std::cout << std::endl << " - " << alg_name;
+    }
+    std::cout << std::endl;
+
+    for (auto& alg_name : scan_det->algs()) {
+      std::cout << "Algorithm " << alg_name << " has fields: ";
+      auto fields = scan_det->alg_fields()[alg_name];
+      for (auto& field : fields) {
+        std::cout << std::endl << " - " << field;
+      }
+      std::cout << std::endl;
+    }
 
     std::chrono::time_point<std::chrono::steady_clock> start_time = std::chrono::steady_clock::now();
     int n_events{0};
 
     for (auto it=ds.begin(); it != ds.end(); it++) {
-      auto raw_det  = det->get_slow_update_data(*it);
+      auto raw_det  = scan_det->get_scan_data(*it, "raw", "step_value");
       if (print) {
-        std::cout << "Value is: " << *reinterpret_cast<double*>(raw_det) << std::endl;
+        std::cout << "Value is: " << *reinterpret_cast<int64_t*>(raw_det) << std::endl;
       }
       n_events++;
     }

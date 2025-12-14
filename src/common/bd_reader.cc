@@ -61,6 +61,9 @@ namespace XTCPP {
                                                         const unsigned& seg_no,
                                                         const std::string& alg,
                                                         const std::string& data_name) {
+      m_logger->debug("Looking up data for " + detname + " segment " +
+                      std::to_string(seg_no) + ": " + alg + "." + data_name +
+                      ". The offset will be cached for faster lookup next time.");
       SegAlgData seg_alg_data = std::make_tuple(seg_no, alg, data_name);
 
       BDXtcOffset offset_placeholder(0,0);
@@ -80,6 +83,33 @@ namespace XTCPP {
       XtcData::Xtc* payload_ptr = m_payload_ptr;
       size_t remaining_payload = m_remaining_payload;
       while (remaining_payload > 0) {
+        if (payload_ptr->contains.id() != XtcData::TypeId::ShapesData) {
+          std::string type_name{""};
+          switch (payload_ptr->contains.id()) {
+          case (XtcData::TypeId::Parent): {
+            type_name = "Parent";
+            // If Parent must go into the XTC
+            payload_ptr = reinterpret_cast<XtcData::Xtc*>(payload_ptr->payload());
+            remaining_payload = payload_ptr->sizeofPayload();
+            break;
+          }
+          case (XtcData::TypeId::Names): {
+            type_name = "Names";
+            // If Names must continue onwards
+            remaining_payload -= payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
+            payload_ptr = payload_ptr->next();
+            break;
+          }
+          default: {
+            type_name = "Uncased type: " + std::to_string(payload_ptr->contains.id());
+            // Don't know what to do here...
+            remaining_payload = 0;
+            break;
+          }
+          }
+          m_logger->trace("Skipping type in payload: " + type_name);
+          continue;
+        }
         XtcData::ShapesData& shapesdata = *reinterpret_cast<XtcData::ShapesData*>(payload_ptr);
         size_t single_shapes_offset{0};
         size_t shape_index{0};
@@ -95,6 +125,9 @@ namespace XTCPP {
           for (size_t i = 0; i < names.num(); i++) {
             XtcData::Name& name = names.get(i);
             if (name.name() != data_name) {
+              m_logger->trace("Skipping " + std::string(name.name()) +
+                              " which has rank " + std::to_string(name.rank()) +
+                              " and type " + std::to_string(name.type()));
               if (name.rank() == 0) {
                 single_shapes_offset += XtcData::Name::get_element_size(name.type());
               } else {

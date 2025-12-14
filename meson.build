@@ -225,6 +225,25 @@ epics_test_app = executable(
     install_rpath: '$ORIGIN/../lib/python' + py_ver + '/site-packages',
 )
 
+scan_test_app = executable(
+    'scan_reader',
+    [
+        'src/app/scan_reader.cc',
+    ],
+    dependencies: [
+        xtcpp_mpi_dep,
+        xtcpp_hdf5_dep,
+    ],
+    include_directories: include_directories(
+        'src',
+    ),
+    install: true,
+    install_dir: get_option('bindir'),
+    # *** this is horrible but I don't know how to fix it *** #
+    build_rpath: '$ORIGIN/../lib/python' + py_ver + '/site-packages',
+    install_rpath: '$ORIGIN/../lib/python' + py_ver + '/site-packages',
+)
+
 #### Python module ####
 #######################
 

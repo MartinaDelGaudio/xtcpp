@@ -89,6 +89,8 @@ namespace XTCPP
     GeneralIOError
   };
 
+  using DetAlgList = std::map<std::string, std::vector<std::string>>;
+  using DetAlgDataList = std::map<std::string, std::map<std::string, std::vector<std::string>>>;
   using AlgDataNameIndex = std::map<std::string, std::map<std::string, std::map<unsigned, XtcData::NameIndex>>>;
   namespace Base {
     /**
@@ -205,8 +207,22 @@ namespace XTCPP
        */
       std::map<std::string, std::string> det_types() const { return m_det_types; }
 
+      /**
+       * Contains the mapping of NameIndex objects to their fields/algs/detectors
+       * to facilitate lookup at the BDReader level.
+       */
       const AlgDataNameIndex&
       alg_map() const { return m_alg_map; }
+
+      /**
+       * Contains the vector algorithms per detector.
+       */
+      DetAlgList det_algs() const { return m_det_algs; }
+
+      /**
+       * Contains the map of data fields to algorithm per detector.
+       */
+      DetAlgDataList det_alg_fields() const { return m_det_alg_fields; }
 
       /**
        * The set of EPICS detector names (if any) in the file managed by this reader.
@@ -218,16 +234,21 @@ namespace XTCPP
        */
       bool seen_end_run() const { return m_seen_end_run; }
 
+      /**
+       * The path of the .smd.xtc2 file being read.
+       */
+      std::string smd_path() const { return m_smd_path; }
+
     protected:
       virtual void init_file() {}
 
-      void recurse_dgram_xtcs(XtcData::Xtc *xtc,
+      void recurse_dgram_xtcs(XtcData::Xtc* xtc,
                               XtcData::TransitionId::Value transition_id);
     private:
       void extract_offset_from_dgram_into(
-          XtcData::Xtc *xtc, std::shared_ptr<BDXtcOffset[]> external_buf);
+          XtcData::Xtc* xtc, std::shared_ptr<BDXtcOffset[]> external_buf);
 
-      void inspect_xtc(XtcData::Xtc *xtc,
+      void inspect_xtc(XtcData::Xtc* xtc,
                        XtcData::TransitionId::Value transition_id);
 
     protected:
@@ -272,6 +293,9 @@ namespace XTCPP
                std::map<std::string,          // alg_name
                         std::map<unsigned,    // segment #
                                  XtcData::NameIndex>>> m_alg_map;
+
+      DetAlgList m_det_algs; // Detector to algorithms
+      DetAlgDataList m_det_alg_fields; // Fields to algorithm, per detector
 
       std::vector<unsigned> m_offset_in_xtc;
 

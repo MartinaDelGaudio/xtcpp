@@ -1,8 +1,8 @@
 #ifndef XTCPP_BASE_DATASOURCE_HH
 #define XTCPP_BASE_DATASOURCE_HH
 
-#include "detector.hh"
-#include "bd_reader.hh"
+#include "common/bd_reader.hh"
+#include "common/detector.hh"
 
 #include "xtcdata/xtc/Dgram.hh"
 

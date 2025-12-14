@@ -117,6 +117,8 @@ namespace XTCPP {
         m_serial_nos = m_smd_reader->serial_numbers();
         m_det_types = m_smd_reader->det_types();
         m_epics_detnames = m_smd_reader->epics_detnames();
+        m_det_algs = m_smd_reader->det_algs();
+        m_det_alg_fields = m_smd_reader->det_alg_fields();
 
         m_read_ptr = m_dgram_buf0;
         m_access_ptr = m_dgram_buf0;
@@ -155,7 +157,6 @@ namespace XTCPP {
             }
             if (dg->service() == XtcData::TransitionId::L1Accept) {
               n_events++;
-            //} else if (dg->service() == XtcData::TransitionId::SlowUpdate) {
             } else {
               n_transitions++;
             }
@@ -200,6 +201,9 @@ namespace XTCPP {
      *      .smd.xtc2 file provided by SMDReader. For all transitions they are
      *      equivalent to the sizes in the .xtc2 file, except for Configure
      *      transitions for reasons I do not understand.
+     * NOTE: The Configure transition is also currently not properly registered
+     *      Because of the use of that initial `read` in the constructor. It
+     *      does not get added into the transition offset buffer.
      */
 
     std::expected<void, BDReadError>
