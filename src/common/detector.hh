@@ -76,6 +76,8 @@ namespace XTCPP {
                bool is_epics,
                bool is_scan);
 
+      virtual ~Detector(){}
+
       /**
        * Retrieve the datagram at an offset index.
        * @param[in] offset_idx The index of the offset to use. I.e. offset index 400

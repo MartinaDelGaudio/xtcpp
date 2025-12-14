@@ -64,37 +64,71 @@ namespace XTCPP {
         offset_window_size = sizeof(BDXtcOffset)*m_events_per_read;
         // Wasteful to allocate so much, but we don't know how many...
         transition_idx_window_size = sizeof(TransitionXtcOffset)*m_events_per_read;
-        transition_dgram_window_size = 0x4000000;
+        transition_dgram_window_size = 0x40000;
       }
-      MPI_Win_allocate_shared(offset_window_size,
-                              sizeof(BDXtcOffset),
-                              MPI_INFO_NULL,
-                              m_shmem_comm,
-                              &m_l1_offsets,
-                              &m_offset_win);
+      int rc = MPI_Win_allocate_shared(offset_window_size,
+                                       sizeof(BDXtcOffset),
+                                       MPI_INFO_NULL,
+                                       m_shmem_comm,
+                                       &m_l1_offsets,
+                                       &m_offset_win);
+      if (rc != MPI_SUCCESS) {
+        char error_buf[256];
+        int error_buf_len;
+        MPI_Error_string(rc, error_buf, &error_buf_len);
+        m_logger->error("*** Failed to allocate L1Accept offset window: " +
+                        std::string(error_buf));
+      }
 
-      MPI_Win_allocate_shared(transition_idx_window_size,
-                              sizeof(TransitionXtcOffset),
-                              MPI_INFO_NULL,
-                              m_shmem_comm,
-                              &m_transition_offsets,
-                              &m_transition_idx_win);
+      rc = MPI_Win_allocate_shared(transition_idx_window_size,
+                                   sizeof(TransitionXtcOffset),
+                                   MPI_INFO_NULL,
+                                   m_shmem_comm,
+                                   &m_transition_offsets,
+                                   &m_transition_idx_win);
 
-      MPI_Win_allocate_shared(transition_dgram_window_size,
-                              sizeof(char),
-                              MPI_INFO_NULL,
-                              m_shmem_comm,
-                              &m_transition_dgram_buf,
-                              &m_transition_dgram_win);
+      if (rc != MPI_SUCCESS) {
+        char error_buf[256];
+        int error_buf_len;
+        MPI_Error_string(rc, error_buf, &error_buf_len);
+        m_logger->error("*** Failed to allocate Transition offset window: " +
+                        std::string(error_buf));
+      }
+
+      rc = MPI_Win_allocate_shared(transition_dgram_window_size,
+                                   sizeof(char),
+                                   MPI_INFO_NULL,
+                                   m_shmem_comm,
+                                   &m_transition_dgram_buf,
+                                   &m_transition_dgram_win);
+
+      if (rc != MPI_SUCCESS) {
+        char error_buf[256];
+        int error_buf_len;
+        MPI_Error_string(rc, error_buf, &error_buf_len);
+        m_logger->error("*** Failed to allocate Transition dgram buffer window: " +
+                        std::string(error_buf));
+      }
 
       if (m_shmem_rank != 0) {
         MPI_Aint query_size;
         int disp_unit;
-        MPI_Win_shared_query(m_offset_win,
-                             0,
-                             &query_size,
-                             &disp_unit,
-                             &m_l1_offsets);
+        rc = MPI_Win_shared_query(m_offset_win,
+                                  0,
+                                  &query_size,
+                                  &disp_unit,
+                                  &m_l1_offsets);
+        if (rc != MPI_SUCCESS) {
+          char error_buf[256];
+          int error_buf_len;
+          MPI_Error_string(rc, error_buf, &error_buf_len);
+          m_logger->error("*** Failed to query size of L1Accept offset window: " +
+                          std::string(error_buf));
+        } else {
+          m_logger->trace("Rank " + std::to_string(m_rank) +
+                          " got L1Accept offset window size: " +
+                          std::to_string(query_size));
+        }
 
         MPI_Win_shared_query(m_transition_idx_win,
                              0,
@@ -102,11 +136,35 @@ namespace XTCPP {
                              &disp_unit,
                              &m_transition_offsets);
 
+        if (rc != MPI_SUCCESS) {
+          char error_buf[256];
+          int error_buf_len;
+          MPI_Error_string(rc, error_buf, &error_buf_len);
+          m_logger->error("*** Failed to query size of Transition offset window: " +
+                          std::string(error_buf));
+        } else {
+          m_logger->trace("Rank " + std::to_string(m_rank) +
+                          " got Transition offset window size: " +
+                          std::to_string(query_size));
+        }
+
         MPI_Win_shared_query(m_transition_dgram_win,
                              0,
                              &query_size,
                              &disp_unit,
-                             &m_transition_dgram_win);
+                             &m_transition_dgram_buf);
+
+        if (rc != MPI_SUCCESS) {
+          char error_buf[256];
+          int error_buf_len;
+          MPI_Error_string(rc, error_buf, &error_buf_len);
+          m_logger->error("*** Failed to query size of Transition dgram buffer window: " +
+                          std::string(error_buf));
+        } else {
+          m_logger->trace("Rank " + std::to_string(m_rank) +
+                          " got Transition dgram buffer window size: " +
+                          std::to_string(query_size));
+        }
       }
 
       // We don't care about the dgram (configure) but the read populates the attributes
@@ -136,14 +194,20 @@ namespace XTCPP {
     void BDReader::close() { MPI_File_close(&m_fh); }
 
     BDReader::~BDReader() {
-      close();
       delete[] m_dgram_buf;
       delete[] m_dgram_buf0;
       delete[] m_dgram_buf1;
+      // Ensure cleanup only happens once all ranks exit
+      MPI_Barrier(m_comm);
+      MPI_Win_free(&m_offset_win);
+      MPI_Win_free(&m_transition_idx_win);
+      MPI_Win_free(&m_transition_dgram_win);
+      close();
     }
 
     std::expected<size_t, BDReadError> BDReader::get_next_offsets() {
-      MPI_Win_lock_all(0, m_offset_win);
+      MPI_Win_fence(0, m_offset_win);
+      MPI_Win_fence(0, m_transition_idx_win);
       if (m_shmem_rank == 0) {
         size_t n_events {0};
         size_t n_transitions {0};
@@ -173,14 +237,18 @@ namespace XTCPP {
           /// Handle errors...
         }
       }
-      MPI_Win_sync(m_offset_win);
+      MPI_Win_fence(0, m_offset_win);
+      MPI_Win_fence(0, m_transition_idx_win);
       MPI_Bcast(&m_num_events, 1, MPI_UNSIGNED_LONG_LONG, 0, m_shmem_comm);
       MPI_Bcast(&m_num_transitions, 1, MPI_LONG_LONG, 0, m_shmem_comm);
-      MPI_Win_unlock_all(m_offset_win);
       return m_num_events;
     }
+
     /**
-     * Logic:
+     * Read the nearest transition of specified type to the specified L1Accept
+     * index.
+     *
+     * Logic for making use of the TransitionXtcOffset buffers:
      * if prev_l1_idx is -1 that means the transition has come before an L1Accept
      *   - If looking for SlowUpdate, this can only possibly be DIRECTLY before
      *     an L1Accept. I.e. you have this SlowUpdate and then the L1Accept
@@ -205,13 +273,18 @@ namespace XTCPP {
      *      Because of the use of that initial `read` in the constructor. It
      *      does not get added into the transition offset buffer.
      */
-
     std::expected<void, BDReadError>
     BDReader::read_transition_at(size_t unwrapped_offset_idx,
                                  XtcData::TransitionId::Value transition_id) {
+      if (m_curr_transition_index >= m_num_transitions) {
+        return std::unexpected(BDReadError::AllDgramOffsetsRead);
+      }
       TransitionXtcOffset transition_offset = m_transition_offsets[m_curr_transition_index];
       while (transition_offset.transition_id != transition_id) {
         m_curr_transition_index++;
+        if (m_curr_transition_index >= m_num_transitions) {
+          return std::unexpected(BDReadError::AllDgramOffsetsRead);
+        }
         transition_offset = m_transition_offsets[m_curr_transition_index];
       }
       ssize_t prev_l1_idx = transition_offset.previous_l1_index;
@@ -244,7 +317,7 @@ namespace XTCPP {
         }
 
         XtcData::Dgram* dg = reinterpret_cast<XtcData::Dgram*>(m_transition_dgram_buf);
-        MPI_Win_lock_all(0, m_transition_dgram_win);
+        MPI_Win_fence(0, m_transition_dgram_win);
         if (m_shmem_rank == 0) {
           MPI_Status status;
           std::memset(&status, 0, sizeof(MPI_Status));
@@ -254,6 +327,7 @@ namespace XTCPP {
                                     dgram_size,
                                     MPI_BYTE,
                                     &status);
+          // TODO: This logic is flawed because of early returns..
           /* An error mechanism is needed to distribute the info.. */
           if (rc != MPI_SUCCESS) {
             char error_buf[256];
@@ -274,8 +348,7 @@ namespace XTCPP {
             return std::unexpected(BDReadError::GeneralIOError);
           }
         }
-        MPI_Win_sync(m_transition_dgram_win);
-        MPI_Win_unlock_all(m_transition_dgram_win);
+        MPI_Win_fence(0, m_transition_dgram_win);
         m_payload_ptr = reinterpret_cast<XtcData::Xtc*>(dg->xtc.payload());
         m_remaining_payload = dg->xtc.sizeofPayload();
       }

@@ -133,7 +133,10 @@ namespace XTCPP {
       } else {
         m_logger = spdlog::stdout_color_mt("Base::Detector");
       }
-      get_detector_short_name();
+      if (!m_is_epics && !m_is_scan) {
+        // Only needed for detectors with calibration constants
+        get_detector_short_name();
+      }
 
       const char* det_read_mode = std::getenv("XTCPP_DET_GETDATA");
       if (det_read_mode && std::string(det_read_mode) == "THREADED") {

@@ -37,8 +37,12 @@ namespace XTCPP {
                        is_scan)
       , m_comm(comm)
     {
-      if (!m_is_epics) {
-        init_resources();
+      init_resources();
+    }
+
+    Detector::~Detector() {
+      if (!m_is_epics && !m_is_scan) {
+        MPI_Win_free(&m_calibconst_win);
       }
     }
 

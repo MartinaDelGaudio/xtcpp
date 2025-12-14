@@ -30,6 +30,7 @@ namespace XTCPP {
                std::string run,
                bool is_epics,
                bool is_scan);
+      ~Detector();
 
     private:
       MPI_Comm m_comm;
