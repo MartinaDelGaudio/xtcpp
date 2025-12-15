@@ -137,7 +137,7 @@ namespace XTCPP
        * This should be called after either `read` or `iread` combined with `wait`
        * @return dgram The pointer to the current datagram.
        */
-      virtual XtcData::Dgram* get_current_dgram() {
+      virtual XtcData::Dgram* get_current_l1_dgram() {
         return reinterpret_cast<XtcData::Dgram*>(m_access_ptr +
                                                  m_access_offset);
       }

@@ -47,8 +47,13 @@ namespace XTCPP {
 
       virtual std::expected<void, BDReadError> wait() override;
 
-      virtual const XtcData::Dgram* const get_current_dgram() const override {
+      virtual const XtcData::Dgram* const get_current_l1_dgram() const override {
         return reinterpret_cast<XtcData::Dgram *>(m_dgram_buf);
+      }
+
+      virtual const XtcData::Dgram* const
+      get_current_transition_dgram() const override {
+        return reinterpret_cast<XtcData::Dgram*>(m_transition_dgram_buf);
       }
 
       void close();

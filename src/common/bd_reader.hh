@@ -118,6 +118,16 @@ namespace XTCPP {
       /* Data access */
       /*****************************************************************/
       /**
+       * Return the pointer to the most recently read L1Accept datagram.
+       * This function must be called only after a succesful read or iread/wait.
+       * The `get_data` API is generally of more interest as it actually extracts
+       * the relevant components from inside the datagram.
+       *
+       * @return dgram A pointer to the most recently read datagram.
+       */
+      virtual const XtcData::Dgram* const get_current_l1_dgram() const { return nullptr; }
+
+      /**
        * Return the pointer to the most recently read datagram.
        * This function must be called only after a succesful read or iread/wait.
        * The `get_data` API is generally of more interest as it actually extracts
@@ -125,7 +135,9 @@ namespace XTCPP {
        *
        * @return dgram A pointer to the most recently read datagram.
        */
-      virtual const XtcData::Dgram* const get_current_dgram() const { return nullptr; }
+      virtual const XtcData::Dgram* const get_current_transition_dgram() const {
+        return nullptr;
+      }
 
       /**
        * Return the data associated with a specific "algorithm" and field name
@@ -159,7 +171,7 @@ namespace XTCPP {
        * @return timestamp A 64 bit timestamp, the upper 32 bits are seconds, the lower
        *         32 bits are nanoseconds.
        */
-      virtual uint64_t timestamp() const { return get_current_dgram()->time.value(); }
+      virtual uint64_t timestamp() const { return get_current_l1_dgram()->time.value(); }
       /**
        * Convenience function to access the seconds of the timestamp from the current
        * datagram.
@@ -168,7 +180,7 @@ namespace XTCPP {
        *
        * @return seconds A 32 bit value representing seconds.
        */
-      virtual uint32_t time_seconds() const { return get_current_dgram()->time.seconds(); }
+      virtual uint32_t time_seconds() const { return get_current_l1_dgram()->time.seconds(); }
       /**
        * Convenience function to access the nanoseconds of the timestamp from the current
        * datagram.
@@ -177,7 +189,7 @@ namespace XTCPP {
        *
        * @return seconds A 32 bit value representing nanoseconds.
        */
-      virtual uint32_t time_nanoseconds() const { return get_current_dgram()->time.nanoseconds(); }
+      virtual uint32_t time_nanoseconds() const { return get_current_l1_dgram()->time.nanoseconds(); }
 
       /* General information for convenience (detector names, serial numbers, etc.) */
       /*****************************************************************/

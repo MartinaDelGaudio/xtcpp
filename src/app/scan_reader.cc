@@ -110,7 +110,9 @@ int main(int argc, char* argv[]) {
     for (auto it=ds.begin(); it != ds.end(); it++) {
       auto raw_det  = scan_det->get_scan_data(*it, "raw", "step_value");
       if (print) {
-        std::cout << "Value is: " << *reinterpret_cast<int64_t*>(raw_det) << std::endl;
+        if (raw_det) {
+          std::cout << "Value is: " << *reinterpret_cast<int64_t*>(raw_det) << std::endl;
+        }
       }
       n_events++;
     }

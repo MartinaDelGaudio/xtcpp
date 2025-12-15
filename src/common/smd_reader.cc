@@ -1,5 +1,6 @@
 #include "common/smd_reader.hh"
 
+#include "smd_reader.hh"
 #include "xtcdata/xtc/DescData.hh"
 #include "xtcdata/xtc/NamesLookup.hh"
 #include "xtcdata/xtc/ShapesData.hh"
@@ -175,14 +176,24 @@ namespace XTCPP {
           // If we have yet to see an L1Accept, then the offset in .smd.xtc2 is equal
           // to the offset in .xtc2
           /// TODO: The above actually doesn't seem to be true!!! Investigate why!
+          /// The Configure Transition size doesn't match between the .smd.xtc2
+          /// and .xtc2 files... The others do at least as far as I can tell.
           /// For now, the BDReader must do some hackery if prev_l1 is -1. It will then
           /// Calculate based on the size (which IS accurate at least) and the first
           /// L1Accept offset what the correct SlowUpdate offset should be...
           offset = (m_file_offset - m_read_count) + m_access_offset;
         } else if (m_curr_offset_idx != 0) {
           // Have seen L1 (and not wrapped)... Can use previous L1 offset+size
-          BDXtcOffset prev_l1 = external_buf[m_curr_offset_idx-1];
+          // But... Have to see if any other previous transitions as well
+          BDXtcOffset prev_l1 = external_buf[m_curr_offset_idx - 1];
           offset = prev_l1.offset + prev_l1.size;
+          size_t prev_transition_idx = m_curr_transition_index - 1;
+          TransitionXtcOffset prev_transition = transition_buf[prev_transition_idx];
+          while (prev_transition.previous_l1_index == m_last_l1_idx_seen) {
+            offset += prev_transition.size;
+            prev_transition_idx--;
+            prev_transition = transition_buf[prev_transition_idx];
+          }
         } else {
           // We wrapped and the first item is a SlowUpdate...
           // TODO: Find a better approach...

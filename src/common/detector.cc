@@ -438,7 +438,7 @@ namespace XTCPP {
       auto& reader = m_xtc_readers[0];
       auto ret = reader->read_l1_at(offset_idx);
       if (ret.has_value()) {
-        return reader->get_current_dgram();
+        return reader->get_current_l1_dgram();
       } else {
         /// Handle errors?
         return nullptr;
