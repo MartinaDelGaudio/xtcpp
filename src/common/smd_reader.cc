@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace XTCPP {
 
@@ -91,15 +92,17 @@ namespace XTCPP {
             m_det_algs[detname] = {alg.name()};
           }
 
-          std::vector<std::string> fields;
+          std::vector<std::pair<std::string, XtcData::Name::DataType>> fields;
           for (size_t i = 0; i < names.num(); ++i) {
-            fields.push_back(names.get(i).name());
+            auto field_name = names.get(i);
+            fields.push_back(std::make_pair(field_name.name(),
+                                            field_name.type()));
           }
           if (m_det_alg_fields.find(detname) != m_det_alg_fields.end()) {
             auto& alg_fields = m_det_alg_fields[detname];
             alg_fields[alg.name()] = fields;
           } else {
-            std::map<std::string,std::vector<std::string>> alg_fields;
+            std::map<std::string,std::vector<std::pair<std::string,XtcData::Name::DataType>>> alg_fields;
             alg_fields[alg.name()] = fields;
             m_det_alg_fields[detname] = alg_fields;
           }

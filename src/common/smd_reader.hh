@@ -4,6 +4,7 @@
 #include "xtcdata/xtc/Dgram.hh"
 #include "xtcdata/xtc/NamesLookup.hh"
 #include "xtcdata/xtc/NameIndex.hh"
+#include "xtcdata/xtc/ShapesData.hh" // XtcData::Name::DataType
 
 #include "spdlog/sinks/stdout_color_sinks.h"
 
@@ -90,7 +91,9 @@ namespace XTCPP
   };
 
   using DetAlgList = std::map<std::string, std::vector<std::string>>;
-  using DetAlgDataList = std::map<std::string, std::map<std::string, std::vector<std::string>>>;
+  using DetAlgDataList = std::map<std::string,
+                                  std::map<std::string,
+                                           std::vector<std::pair<std::string,XtcData::Name::DataType>>>>;
   using AlgDataNameIndex = std::map<std::string, std::map<std::string, std::map<unsigned, XtcData::NameIndex>>>;
   namespace Base {
     /**
@@ -294,8 +297,11 @@ namespace XTCPP
                         std::map<unsigned,    // segment #
                                  XtcData::NameIndex>>> m_alg_map;
 
-      DetAlgList m_det_algs; // Detector to algorithms
-      DetAlgDataList m_det_alg_fields; // Fields to algorithm, per detector
+      DetAlgList m_det_algs; ///< Algorithm vector for each detector
+      /**
+       * Map of algorithms to vector of fields/type pairs for each detector
+       */
+      DetAlgDataList m_det_alg_fields;
 
       std::vector<unsigned> m_offset_in_xtc;
 

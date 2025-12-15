@@ -6,6 +6,8 @@
 #include "hdf5/mpiwriter.hh"
 #include "mpi/smd_reader.hh"
 
+#include "xtcdata/xtc/ShapesData.hh"
+
 #include "mpi.h"
 
 //#include <pybind11/chrono.h>
@@ -32,6 +34,50 @@ PYBIND11_MAKE_OPAQUE(XTCPP::MPI::BDReader)
 PYBIND11_MAKE_OPAQUE(XTCPP::Base::DataSource)
 PYBIND11_MAKE_OPAQUE(XTCPP::Base::Detector)
 PYBIND11_MAKE_OPAQUE(XTCPP::Base::BDReader)
+
+namespace {
+  /**
+   * The XtcData::Name::DataType enum has the following enumerators:
+   * { UINT8, UINT16, UINT32, UINT64, INT8, INT16, INT32, INT64, FLOAT, DOUBLE,
+   *   CHARSTR, ENUMVAL, ENUMDICT}
+   *
+   * This function takes void* pointer which is returned from the get_*_data
+   * C++ APIs, and a datatype enumerator to return a Python object of appropriate
+   * type.
+   *
+   * @param[in] val Raw data pointer.
+   * @param[in] dtype The enumerator describing the data type pointed to by val.
+   * @return object The cast Python object.
+   */
+  py::object cast_to_pyobject(void* val, XtcData::Name::DataType dtype) {
+    switch (dtype) {
+    case XtcData::Name::UINT8:
+      return py::cast(*reinterpret_cast<uint8_t *>(val));
+    case XtcData::Name::UINT16:
+      return py::cast(*reinterpret_cast<uint16_t *>(val));
+    case XtcData::Name::UINT32:
+      return py::cast(*reinterpret_cast<uint32_t *>(val));
+    case XtcData::Name::UINT64:
+      return py::cast(*reinterpret_cast<uint64_t *>(val));
+    case XtcData::Name::INT8:
+      return py::cast(*reinterpret_cast<int8_t *>(val));
+    case XtcData::Name::INT16:
+      return py::cast(*reinterpret_cast<int16_t *>(val));
+    case XtcData::Name::INT32:
+      return py::cast(*reinterpret_cast<int32_t *>(val));
+    case XtcData::Name::INT64:
+      return py::cast(*reinterpret_cast<int64_t *>(val));
+    case XtcData::Name::FLOAT:
+      return py::cast(*reinterpret_cast<float *>(val));
+    case XtcData::Name::DOUBLE:
+      return py::cast(*reinterpret_cast<double *>(val));
+    case XtcData::Name::CHARSTR:
+      return py::cast(*reinterpret_cast<char *>(val));
+    default:
+      return py::object(py::cast(nullptr));
+    }
+  }
+}
 
 /**
  * Note: Must be careful in the class definitions for selecting the "holder"
@@ -102,7 +148,41 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
         size_t ncols{1024};
         std::vector<size_t> shape{nsegs, nrows, ncols};
         return py::array_t<float>(shape, float_data);
-      });
+      })
+    .def("get", [](XTCPP::Base::Detector& self,
+                   size_t evt,
+                   std::string alg,
+                   std::string field) -> py::object {
+      void* val;
+      XtcData::Name::DataType dtype;
+      if (self.is_epics()) {
+        auto fields = self.alg_fields()["raw"];
+        for (auto& [name, type] : fields) {
+          if (name == self.detname()) {
+            dtype = type;
+            break;
+          }
+        }
+        val = self.get_slow_update_data(evt);
+        return cast_to_pyobject(val, dtype);
+      } else if (self.is_scan()) {
+        auto fields = self.alg_fields()[alg];
+        for (auto &[name, type] : fields) {
+          if (name == field) {
+            dtype = type;
+            break;
+          }
+        }
+        val = self.get_scan_data(evt, alg, field);
+        return cast_to_pyobject(val, dtype);
+      } else {
+        val = self.get_l1_data(evt, alg, field);
+        return py::object(py::cast(nullptr));
+      }
+    },
+         py::arg("evt"),
+         py::arg("alg") = "raw",
+         py::arg("field") = "raw");
 
   py::class_<XTCPP::MPI::Detector,
              std::shared_ptr<XTCPP::MPI::Detector>,
@@ -154,7 +234,41 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
 		    size_t ncols {1024};
 		    std::vector<size_t> shape {nsegs, nrows, ncols};
 		    return py::array_t<float>(shape, float_data);
-    });
+    })
+    .def("get", [](XTCPP::MPI::Detector& self,
+                   size_t evt,
+                   std::string alg,
+                   std::string field) -> py::object {
+      void* val;
+      XtcData::Name::DataType dtype;
+      if (self.is_epics()) {
+        auto fields = self.alg_fields()["raw"];
+        for (auto& [name, type] : fields) {
+          if (name == self.detname()) {
+            dtype = type;
+            break;
+          }
+        }
+        val = self.get_slow_update_data(evt);
+        return cast_to_pyobject(val, dtype);
+      } else if (self.is_scan()) {
+        auto fields = self.alg_fields()[alg];
+        for (auto &[name, type] : fields) {
+          if (name == field) {
+            dtype = type;
+            break;
+          }
+        }
+        val = self.get_scan_data(evt, alg, field);
+        return cast_to_pyobject(val, dtype);
+      } else {
+        val = self.get_l1_data(evt, alg, field);
+        return py::object(py::cast(nullptr));
+      }
+    },
+         py::arg("evt"),
+         py::arg("alg") = "raw",
+         py::arg("field") = "raw");
 
   py::class_<XTCPP::MPI::HDF5Writer>(m, "SmallData")
     .def(py::init([](size_t batch_size) {

@@ -149,8 +149,14 @@ namespace XTCPP {
       }
 
       auto& reader = m_xtc_readers[0];
-      m_det_algs = reader->det_algs()[m_detname];
-      m_det_alg_fields = reader->det_alg_fields()[m_detname];
+      if (m_is_epics) {
+
+        m_det_algs = reader->det_algs()["epics"];
+        m_det_alg_fields = reader->det_alg_fields()["epics"];
+      } else {
+        m_det_algs = reader->det_algs()[m_detname];
+        m_det_alg_fields = reader->det_alg_fields()[m_detname];
+      }
     }
 
     void Detector::load_all_calib_constants() {

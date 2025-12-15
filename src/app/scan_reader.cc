@@ -98,8 +98,8 @@ int main(int argc, char* argv[]) {
     for (auto& alg_name : scan_det->algs()) {
       std::cout << "Algorithm " << alg_name << " has fields: ";
       auto fields = scan_det->alg_fields()[alg_name];
-      for (auto& field : fields) {
-        std::cout << std::endl << " - " << field;
+      for (auto& [field_name, field_type] : fields) {
+        std::cout << std::endl << " - " << field_name << "(type: " << field_type << ")";
       }
       std::cout << std::endl;
     }
