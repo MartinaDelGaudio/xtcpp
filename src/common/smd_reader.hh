@@ -20,6 +20,18 @@
 
 namespace XTCPP
 {
+  class DataField {
+  public:
+    DataField(std::string name_, XtcData::Name::DataType data_type_, unsigned rank_)
+      : name(name_)
+      , data_type(data_type_)
+      , rank(rank_)
+    {}
+    std::string name;
+    XtcData::Name::DataType data_type;
+    unsigned rank;
+  };
+
   /**
    * Holds information about the offset and size of a single datagram in an XTC2
    * file. A vector/array of these should be used to represent the offsets of an
@@ -93,7 +105,7 @@ namespace XTCPP
   using DetAlgList = std::map<std::string, std::vector<std::string>>;
   using DetAlgDataList = std::map<std::string,
                                   std::map<std::string,
-                                           std::vector<std::pair<std::string,XtcData::Name::DataType>>>>;
+                                           std::vector<DataField>>>;
   using AlgDataNameIndex = std::map<std::string, std::map<std::string, std::map<unsigned, XtcData::NameIndex>>>;
   namespace Base {
     /**

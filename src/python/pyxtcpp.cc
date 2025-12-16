@@ -52,31 +52,55 @@ namespace {
   py::object cast_to_pyobject(void* val, XtcData::Name::DataType dtype) {
     switch (dtype) {
     case XtcData::Name::UINT8:
-      return py::cast(*reinterpret_cast<uint8_t *>(val));
+      return py::cast(*reinterpret_cast<uint8_t*>(val));
     case XtcData::Name::UINT16:
-      return py::cast(*reinterpret_cast<uint16_t *>(val));
+      return py::cast(*reinterpret_cast<uint16_t*>(val));
     case XtcData::Name::UINT32:
-      return py::cast(*reinterpret_cast<uint32_t *>(val));
+      return py::cast(*reinterpret_cast<uint32_t*>(val));
     case XtcData::Name::UINT64:
-      return py::cast(*reinterpret_cast<uint64_t *>(val));
+      return py::cast(*reinterpret_cast<uint64_t*>(val));
     case XtcData::Name::INT8:
-      return py::cast(*reinterpret_cast<int8_t *>(val));
+      return py::cast(*reinterpret_cast<int8_t*>(val));
     case XtcData::Name::INT16:
-      return py::cast(*reinterpret_cast<int16_t *>(val));
+      return py::cast(*reinterpret_cast<int16_t*>(val));
     case XtcData::Name::INT32:
-      return py::cast(*reinterpret_cast<int32_t *>(val));
+      return py::cast(*reinterpret_cast<int32_t*>(val));
     case XtcData::Name::INT64:
-      return py::cast(*reinterpret_cast<int64_t *>(val));
+      return py::cast(*reinterpret_cast<int64_t*>(val));
     case XtcData::Name::FLOAT:
-      return py::cast(*reinterpret_cast<float *>(val));
+      return py::cast(*reinterpret_cast<float*>(val));
     case XtcData::Name::DOUBLE:
-      return py::cast(*reinterpret_cast<double *>(val));
+      return py::cast(*reinterpret_cast<double*>(val));
     case XtcData::Name::CHARSTR:
-      return py::cast(*reinterpret_cast<char *>(val));
+      return py::cast(*reinterpret_cast<char*>(val));
     default:
       return py::object(py::cast(nullptr));
     }
   }
+
+  class AlgWrapper {
+  public:
+    AlgWrapper(std::shared_ptr<XTCPP::Base::Detector> det_,
+               std::string name_,
+               unsigned version_)
+      : det(det_)
+      , name(name_)
+      , version(version_)
+    {}
+  public:
+    std::shared_ptr<XTCPP::Base::Detector> det;
+    std::string name;
+    unsigned version;
+  };
+
+  class DetectorWrapper {
+  public:
+    DetectorWrapper(std::shared_ptr<XTCPP::Base::Detector> det)
+      : _det(det)
+    {}
+  public:
+    std::shared_ptr<XTCPP::Base::Detector> _det;
+  };
 }
 
 /**
@@ -95,180 +119,49 @@ PYBIND11_MODULE(_xtcpp, m, py::mod_gil_not_used()) {
     .def_readwrite("offset", &XTCPP::BDXtcOffset::offset)
     .def_readwrite("size", &XTCPP::BDXtcOffset::size);
 
-  py::class_<XTCPP::MPI::DataSource>(m, "DataSource")
-    .def(py::init<std::string,
-                  std::variant<std::string, int>,
-	                size_t>())
+  py::class_<DetectorWrapper, std::shared_ptr<DetectorWrapper>>(m, "DetectorWrapper", py::dynamic_attr());
+  py::class_<AlgWrapper, std::shared_ptr<AlgWrapper>>(m, "AlgWrapper", py::dynamic_attr());
+
+  py::class_<XTCPP::MPI::DataSource>(m, "MPIDataSource")
+    .def(py::init<std::string, std::variant<std::string, int>, size_t>())
     .def("rank", &XTCPP::MPI::DataSource::rank)
-    .def("detector",
-         &XTCPP::MPI::DataSource::detector,
-         py::keep_alive<0,1>(),
-         py::return_value_policy::reference)
     .def("__iter__",
-         [](XTCPP::MPI::DataSource& ds) {
-           return py::make_iterator(ds.begin(), ds.end());
+         [](XTCPP::MPI::DataSource& self) {
+           return py::make_iterator(self.begin(), self.end());
          },
-         py::keep_alive<0, 1>());
-
-  py::class_<XTCPP::Base::Detector, std::shared_ptr<XTCPP::Base::Detector>>(
-      m, "Detector")
-      .def(py::init([](std::string detname,
-                       std::string serial_no,
-                       std::vector<unsigned> segment_nos,
-                       std::vector<std::shared_ptr<XTCPP::Base::BDReader>> xtc_readers,
-                       std::string experiment,
-                       std::string run,
-                       bool is_epics,
-                       bool is_scan) {
-            return new XTCPP::Base::Detector(detname,
-                                             serial_no,
-                                             segment_nos,
-                                             xtc_readers,
-                                             experiment,
-                                             run,
-                                             is_epics,
-                                             is_scan);
-          }))
-      .def("raw", [](XTCPP::Base::Detector& self, size_t evt) {
-        if (self.is_epics()) {
-          return self.get_slow_update_data(evt);
-        } else if (self.is_scan()) {
-          return self.get_scan_data(evt, "raw", "step_value");
-        } else {
-          return self.get_l1_data(evt, "raw", "raw");
-        }
-      })
-      .def("calib", [](XTCPP::Base::Detector& self, size_t evt) {
-        [[maybe_unused]] auto raw_data = self.get_l1_data(evt, "raw", "raw");
-        std::vector<std::float32_t> calib_data =
-            XTCPP::calibrate(self.data_ptrs(), self.calibconst_span());
-        float* float_data = reinterpret_cast<float*>(calib_data.data());
-        size_t nsegs{32};
-        size_t nrows{512};
-        size_t ncols{1024};
-        std::vector<size_t> shape{nsegs, nrows, ncols};
-        return py::array_t<float>(shape, float_data);
-      })
-    .def("get", [](XTCPP::Base::Detector& self,
-                   size_t evt,
-                   std::string alg,
-                   std::string field) -> py::object {
-      void* val;
-      XtcData::Name::DataType dtype;
-      if (self.is_epics()) {
-        auto fields = self.alg_fields()["raw"];
-        for (auto& [name, type] : fields) {
-          if (name == self.detname()) {
-            dtype = type;
-            break;
-          }
-        }
-        val = self.get_slow_update_data(evt);
-        return cast_to_pyobject(val, dtype);
-      } else if (self.is_scan()) {
-        auto fields = self.alg_fields()[alg];
-        for (auto &[name, type] : fields) {
-          if (name == field) {
-            dtype = type;
-            break;
-          }
-        }
-        val = self.get_scan_data(evt, alg, field);
-        return cast_to_pyobject(val, dtype);
-      } else {
-        val = self.get_l1_data(evt, alg, field);
-        return py::object(py::cast(nullptr));
-      }
-    },
-         py::arg("evt"),
-         py::arg("alg") = "raw",
-         py::arg("field") = "raw");
-
-  py::class_<XTCPP::MPI::Detector,
-             std::shared_ptr<XTCPP::MPI::Detector>,
-             XTCPP::Base::Detector>(m, "MPIDetector")
-    .def(py::init([](int comm_f,
-                     std::string detname,
-                     std::string serial_no,
-                     std::vector<unsigned> segment_nos,
-                     std::vector<std::shared_ptr<XTCPP::Base::BDReader>> xtc_readers,
-                     std::string experiment,
-                     std::string run,
-                     bool is_epics,
-                     bool is_scan) {
-      MPI_Comm comm = MPI_Comm_f2c(comm_f);
-      ///*
-      return new XTCPP::MPI::Detector(comm,
-                                      detname,
-                                      serial_no,
-                                      segment_nos,
-                                      xtc_readers,
-                                      experiment,
-                                      run,
-                                      is_epics,
-                                      is_scan);
-    }))
-    .def("raw", [](XTCPP::MPI::Detector& self, size_t evt) {
-      if (self.is_epics()) {
-		    return self.get_slow_update_data(evt);
-      } else if (self.is_scan()) {
-        return self.get_scan_data(evt, "raw", "step_value");
-      } else {
-        return self.get_l1_data(evt, "raw", "raw");
-      }
-    })
-    .def("calib", [](XTCPP::MPI::Detector& self, size_t evt) {
-      [[maybe_unused]]auto raw_data = self.get_l1_data(evt, "raw", "raw");
-        //std::vector<std::float32_t> calib_data =
-        //  XTCPP::calibrate(self.data_ptrs(), self.calibconst_span());
-        //float* float_data = reinterpret_cast<float*>(calib_data.data());
-		    // This version will fill in a passed buffer. We fill in the buffer
-		    // which is pre-allocated. Then once it is filled with new data
-		    // we will return it.
-		    XTCPP::calibrate(self.data_ptrs(),
-                         self.calibconst_span(),
-                         self.calib_data_buf());
-		    float* float_data = reinterpret_cast<float*>(self.calib_data_buf().data());
-		    size_t nsegs {32};
-		    size_t nrows {512};
-		    size_t ncols {1024};
-		    std::vector<size_t> shape {nsegs, nrows, ncols};
-		    return py::array_t<float>(shape, float_data);
-    })
-    .def("get", [](XTCPP::MPI::Detector& self,
-                   size_t evt,
-                   std::string alg,
-                   std::string field) -> py::object {
-      void* val;
-      XtcData::Name::DataType dtype;
-      if (self.is_epics()) {
-        auto fields = self.alg_fields()["raw"];
-        for (auto& [name, type] : fields) {
-          if (name == self.detname()) {
-            dtype = type;
-            break;
-          }
-        }
-        val = self.get_slow_update_data(evt);
-        return cast_to_pyobject(val, dtype);
-      } else if (self.is_scan()) {
-        auto fields = self.alg_fields()[alg];
-        for (auto &[name, type] : fields) {
-          if (name == field) {
-            dtype = type;
-            break;
-          }
-        }
-        val = self.get_scan_data(evt, alg, field);
-        return cast_to_pyobject(val, dtype);
-      } else {
-        val = self.get_l1_data(evt, alg, field);
-        return py::object(py::cast(nullptr));
-      }
-    },
-         py::arg("evt"),
-         py::arg("alg") = "raw",
-         py::arg("field") = "raw");
+         py::keep_alive<0, 1>())
+    .def("detector",
+         [](XTCPP::MPI::DataSource& self, std::string detname) {
+           auto det = self.detector(detname);
+           std::shared_ptr<DetectorWrapper> det_wrapper = std::make_shared<DetectorWrapper>(det);
+           py::object py_det = py::cast(det_wrapper);
+           for (auto [alg_name, fields] : det->alg_fields()) {
+             std::shared_ptr<AlgWrapper> alg_wrapper = std::make_shared<AlgWrapper>(det,
+                                                                                    alg_name,
+                                                                                    0);
+             py::object py_alg = py::cast(alg_wrapper);
+             for (auto field : fields) {
+               py_alg.attr(field.name.c_str()) =
+                 py::cpp_function([field](AlgWrapper& self, size_t evt) -> py::object {
+                   auto alg_det = self.det;
+                   void* val;
+                   if (alg_det->is_epics()) {
+                     val = alg_det->get_slow_update_data(evt);
+                   } else if (alg_det->is_scan()) {
+                     val = alg_det->get_scan_data(evt, self.name, field.name);
+                   } else {
+                     val = alg_det->get_l1_data(evt, self.name, field.name);
+                   }
+                   return cast_to_pyobject(val, field.data_type);
+                 },
+                   py::is_method(py_alg));
+             }
+             py_det.attr(alg_name.c_str()) = py_alg;
+           }
+           return py_det;
+         },
+         py::keep_alive<0,1>(),
+         py::return_value_policy::reference);
 
   py::class_<XTCPP::MPI::HDF5Writer>(m, "SmallData")
     .def(py::init([](size_t batch_size) {

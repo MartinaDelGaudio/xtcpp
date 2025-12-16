@@ -89,20 +89,15 @@ int main(int argc, char* argv[]) {
     std::chrono::time_point<std::chrono::steady_clock> load_end_time =
       std::chrono::steady_clock::now();
 
-    std::cout << "Scan detector has algorithms: ";
-    for (auto& alg_name : scan_det->algs()) {
+    std::cout << "Scan detector has algorithms and fields: ";
+    for (auto& [alg_name, fields] : scan_det->alg_fields()) {
       std::cout << std::endl << " - " << alg_name;
+      for (auto field : fields) {
+        std::cout << std::endl << "   - " << field.name << " (Rank: " << field.rank
+                  << ", Type: " << field.data_type << ")";
+      }
     }
     std::cout << std::endl;
-
-    for (auto& alg_name : scan_det->algs()) {
-      std::cout << "Algorithm " << alg_name << " has fields: ";
-      auto fields = scan_det->alg_fields()[alg_name];
-      for (auto& [field_name, field_type] : fields) {
-        std::cout << std::endl << " - " << field_name << "(type: " << field_type << ")";
-      }
-      std::cout << std::endl;
-    }
 
     std::chrono::time_point<std::chrono::steady_clock> start_time = std::chrono::steady_clock::now();
     int n_events{0};

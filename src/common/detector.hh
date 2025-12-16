@@ -5,6 +5,7 @@
 
 #include "../util/threadpool.hh"
 
+#include "smd_reader.hh"
 #include "xtcdata/xtc/Dgram.hh"
 #include "xtcdata/xtc/ShapesData.hh" // XtcData::Name::DataType
 
@@ -200,7 +201,7 @@ namespace XTCPP {
       /**
        * A mapping of field names to the various algorithms.
        */
-      std::map<std::string, std::vector<std::pair<std::string,XtcData::Name::DataType>>>
+      std::map<std::string, std::vector<DataField>>
       alg_fields() const { return m_det_alg_fields; }
 
     protected:
@@ -312,8 +313,7 @@ namespace XTCPP {
       /**
        * A mapping of field names to the various algorithms.
        */
-      std::map<std::string, std::vector<std::pair<std::string,XtcData::Name::DataType>>>
-      m_det_alg_fields;
+      std::map<std::string, std::vector<DataField>> m_det_alg_fields;
 
       /**
        * Keeps track of the last index data was read for. Since a `get_data_..`

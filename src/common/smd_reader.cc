@@ -92,17 +92,16 @@ namespace XTCPP {
             m_det_algs[detname] = {alg.name()};
           }
 
-          std::vector<std::pair<std::string, XtcData::Name::DataType>> fields;
+          std::vector<DataField> fields;
           for (size_t i = 0; i < names.num(); ++i) {
             auto field_name = names.get(i);
-            fields.push_back(std::make_pair(field_name.name(),
-                                            field_name.type()));
+            fields.emplace_back(field_name.name(), field_name.type(), field_name.rank());
           }
           if (m_det_alg_fields.find(detname) != m_det_alg_fields.end()) {
             auto& alg_fields = m_det_alg_fields[detname];
             alg_fields[alg.name()] = fields;
           } else {
-            std::map<std::string,std::vector<std::pair<std::string,XtcData::Name::DataType>>> alg_fields;
+            std::map<std::string,std::vector<DataField>> alg_fields;
             alg_fields[alg.name()] = fields;
             m_det_alg_fields[detname] = alg_fields;
           }
