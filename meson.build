@@ -80,6 +80,7 @@ libxtcpp_base = shared_library(
     [
         'src/common/datasource.cc',
         'src/common/detector.cc',
+        'src/common/detector_utils.cc',
         'src/common/bd_reader.cc',
         'src/common/smd_reader.cc',
         'src/util/threadpool.cc',
