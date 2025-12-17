@@ -1,7 +1,8 @@
 #ifndef XTCPP_BASE_DETECTOR_HH
 #define XTCPP_BASE_DETECTOR_HH
 
-#include "bd_reader.hh"
+#include "common/bd_reader.hh"
+#include "common/detector_utils.hh"
 
 #include "../util/threadpool.hh"
 
@@ -22,43 +23,6 @@
 #include <vector>
 
 namespace XTCPP {
-
-  /**
-   * Holds a single set of constants required to calibrate a pixel.
-   * A vector/array etc of these structs would be required to calibrate a full
-   * detector image.
-   */
-  #pragma pack(push,1)
-  class CalibStruct {
-  public:
-    std::float32_t ped;  ///< Holds pedestal + offset should an offset exist
-    std::float32_t gain; ///< Holds the gain value in keV/ADU
-  };
-  #pragma pack(pop)
-
-  /**
-   * Calibrate a detector image
-   * @param[in] data_ptrs A vector of per segment/module raw data.
-   * @param[in] calibconst The calibration constants. Should be a 1 dimensional
-   *            span with a length equal to the total number of pixels. I.e. it
-   *            is not per segment like the data_ptrs vector.
-   * @return calib_data The calibrated data.
-   */
-  std::vector<std::float32_t> calibrate(std::vector<void*>& data_ptrs,
-                                        std::span<CalibStruct>& calibconst);
-
-  /**
-   * Calibrate a detector image
-   * @param[in] data_ptrs A vector of per segment/module raw data.
-   * @param[in] calibconst The calibration constants. Should be a 1 dimensional
-   *            span with a length equal to the total number of pixels. I.e. it
-   *            is not per segment like the data_ptrs vector.
-   * @param[out] calib_data An output buffer to hold the calibrated data.
-   */
-  void calibrate(std::vector<void*>& data_ptrs,
-		 std::span<CalibStruct>& calibconst,
-		 std::vector<std::float32_t>& calib_data);
-
   namespace Base {
     /**
      * The detector class provides a convenience wrapper around a set of BDReader
@@ -204,6 +168,8 @@ namespace XTCPP {
        */
       std::map<std::pair<std::string,unsigned>, std::vector<DataField>>
       alg_fields() const { return m_det_alg_fields; }
+
+      std::string det_type() const { return m_det_type; }
 
     protected:
       /**

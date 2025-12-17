@@ -118,9 +118,9 @@ int main(int argc, char* argv[]) {
 
       if (run_calib && raw_jungfrau) {
         //auto calib_jungfrau = XTCPP::calibrate(jungfrau->data_ptrs(), jungfrau->calibconst_span());
-        XTCPP::calibrate(jungfrau->data_ptrs(),
-                         jungfrau->calibconst_span(),
-                         jungfrau->calib_data_buf());
+        XTCPP::calibrate_jungfrau(jungfrau->data_ptrs(),
+                                  jungfrau->calibconst_span(),
+                                  jungfrau->calib_data_buf());
 
         if (test_smd && n_events % 1 == 0) {
           //std::vector<std::float32_t> dat_to_write(calib_jungfrau.begin(),

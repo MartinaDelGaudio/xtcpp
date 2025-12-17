@@ -1,9 +1,12 @@
-#include "common/smd_reader.hh"
 #include "common/bd_reader.hh"
+#include "common/detector.hh"
+#include "common/detector_utils.hh"
+#include "common/smd_reader.hh"
+
+#include "hdf5/mpiwriter.hh"
+#include "mpi/bd_reader.hh"
 #include "mpi/datasource.hh"
 #include "mpi/detector.hh"
-#include "mpi/bd_reader.hh"
-#include "hdf5/mpiwriter.hh"
 #include "mpi/smd_reader.hh"
 
 #include "xtcdata/xtc/ShapesData.hh"
@@ -316,29 +319,48 @@ namespace {
           py_alg_setattr(field.name.c_str(), MethodType(get_field_method, py_alg));
 
           // TODO: Implement a better method for calib method...
-          if (alg_name == "raw" && detname == "jungfrau") {
+          std::string det_type = det->det_type();
+          if (alg_name == "raw" && (det_type == "jungfrau" || det_type == "epix100")) {
             auto calib_method =
-              py::cpp_function([](AlgWrapper& self, size_t evt) -> py::object {
+              py::cpp_function([det_type](AlgWrapper& self, size_t evt) -> py::object {
                 auto alg_det = self.det;
                 [[maybe_unused]] auto raw_data = alg_det->get_l1_data(evt,
                                                                       "raw",
                                                                       "raw");
-                XTCPP::calibrate(alg_det->data_ptrs(),
+                XTCPP::calibrate(det_type,
+                                 alg_det->data_ptrs(),
                                  alg_det->calibconst_span(),
                                  alg_det->calib_data_buf());
 
-                size_t nsegs{32};
-                size_t nrows{512};
-                size_t ncols{1024};
-                std::vector<size_t> shape{nsegs, nrows, ncols};
-                std::vector<size_t> strides(3);
-                strides[2] = sizeof(float);
-                strides[1] = ncols * strides[2];
-                strides[0] = nrows * strides[1];
+                size_t ndim;
+                std::vector<size_t> shape;
+                std::vector<size_t> strides;
+                if (det_type == "jungfrau") {
+                  size_t nsegs{32};
+                  size_t nrows{512};
+                  size_t ncols{1024};
+                  ndim = 3;
+                  shape = std::vector<size_t>{nsegs, nrows, ncols};
+                  strides = std::vector<size_t>(3);
+                  strides[2] = sizeof(float);
+                  strides[1] = ncols * strides[2];
+                  strides[0] = nrows * strides[1];
+                } else if (det_type == "epix100") {
+                  size_t nrows{704};
+                  size_t ncols{768};
+                  ndim = 2;
+                  shape = std::vector<size_t>{nrows, ncols};
+                  strides = std::vector<size_t>(2);
+                  strides[1] = sizeof(float);
+                  strides[0] = nrows * strides[1];
+                } else {
+                  // This shouldn't happen...
+                  return py::object(py::cast(nullptr));
+                }
                 return py::array_t<float>(py::buffer_info(reinterpret_cast<float*>(alg_det->calib_data_buf().data()),
                                                           sizeof(float),
                                                           py::format_descriptor<float>::format(),
-                                                          3,
+                                                          ndim,
                                                           shape,
                                                           strides));
               });

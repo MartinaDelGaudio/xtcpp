@@ -1,6 +1,7 @@
 #include "common/detector.hh"
 
 #include "common/bd_reader.hh"
+#include "common/detector_utils.hh"
 
 #include "xtcdata/xtc/Dgram.hh"
 #include "xtcdata/xtc/TransitionId.hh"
@@ -24,89 +25,6 @@
 #include <vector>
 
 namespace XTCPP {
-  void calibrate(std::vector<void*>& data_ptrs,
-		 std::span<CalibStruct>& calibconst,
-		 std::vector<std::float32_t>& calib_data) {
-    auto data_mask = 0x3FFF;
-    constexpr size_t NSEGS{32};
-    constexpr size_t NROWS{512};
-    constexpr size_t NCOLS{1024};
-    constexpr size_t NPIX {NSEGS * NROWS * NCOLS};
-    constexpr size_t PIX_PER_SEG {NROWS * NCOLS};
-
-    #pragma omp parallel for schedule(static)
-    for (size_t seg=0; seg < NSEGS; ++seg) {
-      auto* raw_data = reinterpret_cast<std::uint16_t*>(data_ptrs[seg]);
-
-      for (size_t panel_idx=0; panel_idx < PIX_PER_SEG; ++panel_idx) {
-        size_t idx = seg*PIX_PER_SEG + panel_idx;
-
-        uint16_t raw_pixel = raw_data[panel_idx];
-        uint16_t data = raw_pixel & data_mask;
-        size_t gain_idx = raw_pixel >> 14; // Top two bits
-        if (gain_idx > 1) {
-          if (gain_idx == 2) [[unlikely]] {
-            /* This is 0b10 - a bad pixel, hopefully unlikely - what should happen? */
-            continue;
-          } else [[likely]] {
-            gain_idx--; // Map gain_idx 3 (0b11 - low gain) to index 2
-          }
-        }
-        size_t calib_idx = gain_idx * NPIX + idx;
-
-        if (calib_idx >= calibconst.size()) {
-          std::cerr << "Invalid calib_idx: " << calib_idx << ", size is: " << calibconst.size()
-                    << ", gain idx is: " << gain_idx << std::endl;
-          continue;
-        }
-        calib_data[idx] =
-          (data - calibconst[calib_idx].ped) * calibconst[calib_idx].gain;
-      }
-    }
-  }
-
-  std::vector<std::float32_t> calibrate(std::vector<void*>& data_ptrs,
-                                        std::span<CalibStruct>& calibconst) {
-    auto data_mask = 0x3FFF;
-    constexpr size_t NSEGS{32};
-    constexpr size_t NROWS{512};
-    constexpr size_t NCOLS{1024};
-    constexpr size_t NPIX {NSEGS * NROWS * NCOLS};
-    constexpr size_t PIX_PER_SEG {NROWS * NCOLS};
-
-    std::vector<std::float32_t> data_out(32*512*1024);
-
-#pragma omp parallel for schedule(static)
-    for (size_t idx=0; idx < NPIX; ++idx) {
-      size_t seg = idx / PIX_PER_SEG;
-      size_t panel_idx = idx % PIX_PER_SEG;
-
-      auto* raw_data = reinterpret_cast<std::uint16_t*>(data_ptrs[seg]);
-      uint16_t raw_pixel = raw_data[panel_idx];
-      uint16_t data = raw_pixel & data_mask;
-      size_t gain_idx = raw_pixel >> 14; // Top two bits
-      if (gain_idx > 1) {
-        if (gain_idx == 2) [[unlikely]] {
-          /* This is 0b10 - a bad pixel, hopefully unlikely - what should happen? */
-          continue;
-        } else [[likely]] {
-          gain_idx--; // Map gain_idx 3 (0b11 - low gain) to index 2
-        }
-      }
-      size_t calib_idx = gain_idx * NPIX + idx;
-
-      if (calib_idx >= calibconst.size()) {
-        std::cerr << "Invalid calib_idx: " << calib_idx << ", size is: " << calibconst.size()
-                  << ", gain idx is: " << gain_idx << std::endl;
-        continue;
-      }
-      data_out[idx] =
-        (data - calibconst[calib_idx].ped) * calibconst[calib_idx].gain;
-    }
-
-    return data_out;
-  }
-
   namespace Base {
     Detector::Detector(std::string detname,
                        std::string serial_no,
@@ -125,7 +43,6 @@ namespace XTCPP {
       , m_xtc_readers(xtc_readers)
       , m_data_ptrs(m_segment_nos.size())
       , m_data_sizes(m_segment_nos.size())
-      , m_calib_data(32*512*1024)
       , m_is_epics(is_epics)
       , m_is_scan(is_scan)
     {
@@ -157,6 +74,12 @@ namespace XTCPP {
       } else {
         m_det_algs = reader->det_algs()[m_detname];
         m_det_alg_fields = reader->det_alg_fields()[m_detname];
+      }
+
+      if (m_det_type == "jungfrau") {
+        m_calib_data = std::vector<std::float32_t>(32 * 512 * 1024);
+      } else if (m_det_type == "epix100") {
+        m_calib_data = std::vector<std::float32_t>(704 * 768);
       }
     }
 
