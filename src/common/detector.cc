@@ -1,19 +1,25 @@
-#include "detector.hh"
+#include "common/detector.hh"
+
+#include "common/bd_reader.hh"
 
 #include "xtcdata/xtc/Dgram.hh"
+#include "xtcdata/xtc/TransitionId.hh"
 
 #include "httplib.h"
 #include "rapidjson/document.h"
 #include "spdlog/spdlog.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 //#include <mdspan>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <ostream>
 #include <stdfloat>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -33,32 +39,32 @@ namespace XTCPP {
       auto* raw_data = reinterpret_cast<std::uint16_t*>(data_ptrs[seg]);
 
       for (size_t panel_idx=0; panel_idx < PIX_PER_SEG; ++panel_idx) {
-	size_t idx = seg*PIX_PER_SEG + panel_idx;
+        size_t idx = seg*PIX_PER_SEG + panel_idx;
 
-	uint16_t raw_pixel = raw_data[panel_idx];
-	uint16_t data = raw_pixel & data_mask;
-	size_t gain_idx = raw_pixel >> 14; // Top two bits
-	if (gain_idx > 1) {
-	  if (gain_idx == 2) [[unlikely]] {
-	      /* This is 0b10 - a bad pixel, hopefully unlikely - what should happen? */
-	      continue;
-	    } else [[likely]] {
-	      gain_idx--; // Map gain_idx 3 (0b11 - low gain) to index 2
-	    }
-	}
-	size_t calib_idx = gain_idx * NPIX + idx;
+        uint16_t raw_pixel = raw_data[panel_idx];
+        uint16_t data = raw_pixel & data_mask;
+        size_t gain_idx = raw_pixel >> 14; // Top two bits
+        if (gain_idx > 1) {
+          if (gain_idx == 2) [[unlikely]] {
+            /* This is 0b10 - a bad pixel, hopefully unlikely - what should happen? */
+            continue;
+          } else [[likely]] {
+            gain_idx--; // Map gain_idx 3 (0b11 - low gain) to index 2
+          }
+        }
+        size_t calib_idx = gain_idx * NPIX + idx;
 
-	if (calib_idx >= calibconst.size()) {
-	  std::cerr << "Invalid calib_idx: " << calib_idx << ", size is: " << calibconst.size()
-		    << ", gain idx is: " << gain_idx << std::endl;
-	  continue;
-	}
-	calib_data[idx] =
-	  (data - calibconst[calib_idx].ped) * calibconst[calib_idx].gain;
+        if (calib_idx >= calibconst.size()) {
+          std::cerr << "Invalid calib_idx: " << calib_idx << ", size is: " << calibconst.size()
+                    << ", gain idx is: " << gain_idx << std::endl;
+          continue;
+        }
+        calib_data[idx] =
+          (data - calibconst[calib_idx].ped) * calibconst[calib_idx].gain;
       }
     }
   }
-  
+
   std::vector<std::float32_t> calibrate(std::vector<void*>& data_ptrs,
                                         std::span<CalibStruct>& calibconst) {
     auto data_mask = 0x3FFF;
@@ -107,7 +113,9 @@ namespace XTCPP {
                        std::vector<unsigned> segment_nos,
                        std::vector<std::shared_ptr<BDReader>> xtc_readers,
                        std::string experiment,
-                       std::string run)
+                       std::string run,
+                       bool is_epics,
+                       bool is_scan)
       : m_detname(detname)
       , m_serial_no(serial_no)
       , m_det_type(xtc_readers[0]->det_types()[m_detname])
@@ -118,13 +126,38 @@ namespace XTCPP {
       , m_data_ptrs(m_segment_nos.size())
       , m_data_sizes(m_segment_nos.size())
       , m_calib_data(32*512*1024)
+      , m_is_epics(is_epics)
+      , m_is_scan(is_scan)
     {
       if (auto tmp = spdlog::get("Base::Detector")) {
         m_logger = tmp;
       } else {
         m_logger = spdlog::stdout_color_mt("Base::Detector");
       }
-      get_detector_short_name();
+      if (!m_is_epics && !m_is_scan) {
+        // Only needed for detectors with calibration constants
+        get_detector_short_name();
+      }
+
+      const char* det_read_mode = std::getenv("XTCPP_DET_GETDATA");
+      if (det_read_mode && std::string(det_read_mode) == "THREADED") {
+        get_l1_data_impl = &Detector::get_l1_data_threaded;
+        // ThreadPool is not copyable/moveable - construct in place
+        m_thread_pool.emplace(m_xtc_readers.size());
+      } else {
+        get_l1_data_impl = &Detector::get_l1_data_sequential;
+        m_thread_pool = std::nullopt;
+      }
+
+      auto& reader = m_xtc_readers[0];
+      if (m_is_epics) {
+
+        m_det_algs = reader->det_algs()["epics"];
+        m_det_alg_fields = reader->det_alg_fields()["epics"];
+      } else {
+        m_det_algs = reader->det_algs()[m_detname];
+        m_det_alg_fields = reader->det_alg_fields()[m_detname];
+      }
     }
 
     void Detector::load_all_calib_constants() {
@@ -408,44 +441,243 @@ namespace XTCPP {
       }
     }
 
-    XtcData::Dgram* Detector::operator()(size_t offset_idx) {
+    const XtcData::Dgram* const Detector::operator()(size_t offset_idx) {
       auto& reader = m_xtc_readers[0];
-      return reader->get_dgram(offset_idx);
+      auto ret = reader->read_l1_at(offset_idx);
+      if (ret.has_value()) {
+        return reader->get_current_l1_dgram();
+      } else {
+        /// Handle errors?
+        return nullptr;
+      }
     }
 
-    void* Detector::get_data(size_t offset_idx,
-                             const std::string& alg,
-                             const std::string& data_name) {
+    std::tuple<void**,uint32_t,uint32_t*>
+    Detector::get_l1_data(size_t offset_idx,
+                          const std::string& alg,
+                          const std::string& data_name) {
+      return (this->*get_l1_data_impl)(offset_idx, alg, data_name);
+    }
+
+    std::tuple<void**, uint32_t, uint32_t*>
+    Detector::get_scan_data(size_t offset_idx,
+                                  const std::string& alg,
+                                  const std::string& data_name) {
+      // Scan will on BeginStep contain:
+      // - `step_value` -- INT64
+      // - `step_docstring` -- CHARSTR (maybe - always does, but not actually required)
+      // - `scan_var_namexxx` -- This is the name of the variable scanned
+      //   - May have multiple
+      //   - E.g. `lens_h`, `lxt` etc..
+      // *** EndStep will not have any data in it
+      uint32_t data_rank = 0;
+      uint32_t* data_shape = nullptr;
+      if (!m_is_scan) {
+        m_logger->warn(
+            "This function is for the scan detector! "
+            "Use get_l1_data/get_slow_update_data instead.");
+        return std::tuple(nullptr, data_rank, data_shape);
+      }
+
+      auto& reader = m_xtc_readers[0]; // Only 1 -- The same as timing detector
+      bool have_data {false};
+      if (m_last_index_read == static_cast<ssize_t>(offset_idx)) {
+        have_data = true;
+      } else {
+        std::expected<void, BDReadError> ret;
+        ret = reader->read_transition_at(offset_idx, XtcData::TransitionId::BeginStep);
+        have_data = ret.has_value();
+      }
+      if (have_data) {
+        m_last_index_read = static_cast<ssize_t>(offset_idx);
+        std::vector<unsigned> reader_seg_nos =
+            reader->segment_numbers()["scan"];
+        unsigned seg_no = reader_seg_nos[0]; // There should only be 1
+        auto [data_ptr, data_size, rank, shape] =
+          reader->get_data(m_detname, seg_no, alg, data_name);
+        m_data_ptrs[seg_no] = data_ptr;
+        m_data_sizes[seg_no] = data_size;
+        data_rank = rank;
+        data_shape = shape;
+      } else {
+        // Handle errors?
+        return std::make_tuple(nullptr, data_rank, data_shape);
+      }
+      return std::make_tuple(m_data_ptrs.data(), data_rank, data_shape);
+    }
+
+    std::tuple<void**, uint32_t, uint32_t*>
+    Detector::get_slow_update_data(size_t offset_idx) {
+      uint32_t data_rank = 0;
+      uint32_t* data_shape = nullptr;
+      if (!m_is_epics) {
+        m_logger->warn("This function is for EPICS detectors! "
+                       "Use get_l1_data/get_scan_data instead.");
+        return std::make_tuple(nullptr, data_rank, data_shape);
+      }
+      auto& reader = m_xtc_readers[0]; // Only 1
+      bool have_data {false};
+      if (m_last_index_read == static_cast<ssize_t>(offset_idx)) {
+        have_data = true;
+      } else {
+        std::expected<void, BDReadError> ret;
+        ret = reader->read_transition_at(offset_idx);
+        have_data = ret.has_value();
+      }
+      if (have_data) {
+        m_last_index_read = static_cast<ssize_t>(offset_idx);
+        // Data is stored under "epics" detector. The algorithm
+        // is always "raw" and the field name is the PV name - our m_detname
+        std::vector<unsigned> reader_seg_nos =
+          reader->segment_numbers()["epics"];
+        unsigned seg_no = reader_seg_nos[0]; // There should only be 1
+        std::string epics_detname{"epics"};
+        std::string epics_alg{"raw"};
+        std::string pv_name{m_detname};
+        auto [data_ptr, data_size, rank, shape] =
+          reader->get_data(epics_detname, seg_no, epics_alg, pv_name);
+
+        m_data_ptrs[seg_no] = data_ptr;
+        m_data_sizes[seg_no] = data_size;
+        data_rank = rank;
+        data_shape = shape;
+      } else {
+        // Handle errors?
+        return std::make_tuple(nullptr, data_rank, data_shape);
+      }
+      return std::make_tuple(m_data_ptrs.data(), data_rank, data_shape);
+    }
+
+    std::tuple<void**, uint32_t, uint32_t*>
+    Detector::get_l1_data_threaded(size_t offset_idx,
+                                   const std::string& alg,
+                                   const std::string& data_name) {
       /*
         m_logger->trace("Getting data for algorithm {} and field {} at offset idx {}",
         alg,
         data_name,
         offset_idx);
       */
+      uint32_t data_rank = 0;
+      uint32_t data_shape[10]{0,0,0,0,0,0,0,0,0,0};
+
+      // TODO: Setup conditional on m_last_index_read to prevent reading multiple times
+      auto read_func = [&](std::shared_ptr<Base::BDReader> reader) -> void {
+        auto ret = reader->read_l1_at(offset_idx);
+        bool set_rank_and_shape {true};
+        if (ret.has_value()) {
+          std::vector<unsigned> reader_seg_nos =
+              reader->segment_numbers()[m_detname];
+          auto seg_no_it = reader_seg_nos.begin();
+          while (seg_no_it != reader_seg_nos.end()) {
+            auto [data_ptr, data_size, rank, shape] =
+              reader->get_data(m_detname, *seg_no_it, alg, data_name);
+
+            m_data_ptrs[*seg_no_it] = data_ptr;
+            m_data_sizes[*seg_no_it] = data_size;
+            seg_no_it++;
+            if (set_rank_and_shape) {
+              // Set the rank to be 1 greater than per segment information
+              // The first dimension will be the number of segments
+              data_rank = rank + 1;
+              for (size_t i=1, k=1; i <= rank; ++i) {
+                if (shape[i-1] <= 1) {
+                  // Flatten indices that are of size 1
+                  data_rank -= 1;
+                } else {
+                  // Because we flatten, keep track of the index into data_shape
+                  // and the index into shape separately
+                  data_shape[k] = shape[i-1];
+                  k++;
+                }
+              }
+              set_rank_and_shape = false;
+            }
+          }
+        }
+      };
+
+      std::vector<std::shared_future<void>> read_futs;
       for (auto& reader : m_xtc_readers) {
-        XtcData::Dgram* dg = reader->get_dgram(offset_idx);
-        if (dg) {
+        read_futs.push_back((*m_thread_pool).enqueue(read_func, reader));
+      }
+      // Just wait on all the futures - we don't really care if we get stuck
+      // on an early one while a later finished first. We have to wait for them
+      // all
+      for (auto it = read_futs.begin(); it != read_futs.end(); it++) {
+        it->wait();
+      }
+      // Now set the first axis to be of length = number of segments
+      data_shape[0] = m_data_ptrs.size();
+      return std::make_tuple(m_data_ptrs.data(), data_rank, data_shape);
+    }
+
+    std::tuple<void**, uint32_t, uint32_t*>
+    Detector::get_l1_data_sequential(size_t offset_idx,
+                                     const std::string& alg,
+                                     const std::string& data_name) {
+      /*
+        m_logger->trace("Getting data for algorithm {} and field {} at offset idx {}",
+                        alg,
+                        data_name,
+                        offset_idx);
+      */
+      // TODO: Setup conditional on m_last_index_read to prevent reading multiple times
+      // Launch all read asynchronously
+      uint32_t data_rank = 0;
+      uint32_t data_shape[10] = {0,0,0,0,0,0,0,0,0,0};
+      for (auto& reader : m_xtc_readers) {
+        std::expected<void, BDReadError> ret = ret = reader->iread_l1_at(offset_idx);
+        if (ret.has_value()) {
+          continue;
+        } else {
+          // Handle errors?
+          return std::make_tuple(m_data_ptrs.data(), data_rank, data_shape);
+        }
+      }
+
+      bool set_rank_and_shape {true};
+      // Now wait on all of them
+      for (auto& reader : m_xtc_readers) {
+        auto ret = reader->wait();
+        if (ret.has_value()) {
           //m_logger->trace("** Have a non-null dgram return. Now accessing the data field.");
           std::vector<unsigned> reader_seg_nos = reader->segment_numbers()[m_detname];
           auto seg_no_it = reader_seg_nos.begin();
           while (seg_no_it != reader_seg_nos.end()) {
-            auto [data_ptr, data_size] = reader->get_data(m_detname,
-                                                          *seg_no_it,
-                                                          alg,
-                                                          data_name);
+            auto [data_ptr, data_size, rank, shape] =
+              reader->get_data(m_detname, *seg_no_it, alg, data_name);
 
             m_data_ptrs[*seg_no_it] = data_ptr;
             m_data_sizes[*seg_no_it] = data_size;
-
+            if (set_rank_and_shape) {
+              // Set the rank to be 1 greater than per segment information
+              // The first dimension will be the number of segments
+              data_rank = rank+1;
+              for (size_t i=1,k=1; i<=rank; ++i) {
+                if (shape[i-1] <= 1) {
+                  // Flatten indices that are of size 1
+                  data_rank -= 1;
+                } else {
+                  // Because we flatten, keep track of the index into data_shape
+                  // and the index into shape separately
+                  data_shape[k] = shape[i-1];
+                  k++;
+                }
+              }
+              set_rank_and_shape = false;
+            }
             //m_logger->trace("*** Filled in data for segment # {}", *seg_no_it);
             seg_no_it++;
           }
         } else {
-          m_logger->debug("Returning null");
-          return nullptr;
+          // Handle specific errors?
+          return std::make_tuple(nullptr,0,nullptr);
         }
       }
-      return m_data_ptrs.data();
+      // Now set the first axis to be of length = number of segments
+      data_shape[0] = m_data_ptrs.size();
+      return std::make_tuple(m_data_ptrs.data(), data_rank, data_shape);
     }
   } // namespace Base
 } // namespace XTCPP

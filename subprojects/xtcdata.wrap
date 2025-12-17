@@ -1,0 +1,9 @@
+[wrap-git]
+url = https://github.com/slac-lcls/lcls2.git
+revision = 4.2.1
+method = meson
+
+diff_files = xtcdata/just-xtcdata.patch
+
+[provide]
+dependency_names = staticXtc_dep

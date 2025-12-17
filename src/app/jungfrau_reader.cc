@@ -112,26 +112,27 @@ int main(int argc, char* argv[]) {
       //std::cout << "Event offset index: " << *it << " [Rank: " << ds.rank() << "]" << std::endl;
       //auto dg_epix100 = epix100(*it);
       //auto dg_jungfrau = jungfrau(*it);
-      [[maybe_unused]] auto raw_epix100  = epix100->get_data(*it,"raw","raw");
-      auto raw_jungfrau = jungfrau->get_data(*it,"raw","raw");
+      [[maybe_unused]] auto ret_epix100  = epix100->get_l1_data(*it,"raw","raw");
+      auto ret_jungfrau = jungfrau->get_l1_data(*it,"raw","raw");
+      auto [raw_jungfrau, rank_jungfrau, shape_jungfrau] = ret_jungfrau;
 
       if (run_calib && raw_jungfrau) {
-	//auto calib_jungfrau = XTCPP::calibrate(jungfrau->data_ptrs(), jungfrau->calibconst_span());
-	XTCPP::calibrate(jungfrau->data_ptrs(),
-			 jungfrau->calibconst_span(),
-			 jungfrau->calib_data_buf());
+        //auto calib_jungfrau = XTCPP::calibrate(jungfrau->data_ptrs(), jungfrau->calibconst_span());
+        XTCPP::calibrate(jungfrau->data_ptrs(),
+                         jungfrau->calibconst_span(),
+                         jungfrau->calib_data_buf());
 
-	if (test_smd && n_events % 1 == 0) {
-	  //std::vector<std::float32_t> dat_to_write(calib_jungfrau.begin(),
-	  //					   calib_jungfrau.begin() + 512*1024);
-	  std::vector<std::float32_t> dat_to_write(jungfrau->calib_data_buf().begin(),
-	  					   jungfrau->calib_data_buf().begin() + 512*1024);
-	  std::map<std::string,std::vector<size_t>> shape;
-	  shape["/jungfrau/test"] = {1,512,1024};
-	  std::map<std::string,std::any> evt_data;
-	  evt_data["/jungfrau/test"]=dat_to_write;
-	  small_data.event(evt_data, shape);
-	}
+        if (test_smd && n_events % 1 == 0) {
+          //std::vector<std::float32_t> dat_to_write(calib_jungfrau.begin(),
+          //					   calib_jungfrau.begin() + 512*1024);
+          std::vector<std::float32_t> dat_to_write(jungfrau->calib_data_buf().begin(),
+                                                   jungfrau->calib_data_buf().begin() + 512*1024);
+          std::map<std::string,std::vector<size_t>> shape;
+          shape["/jungfrau/test"] = {1,512,1024};
+          std::map<std::string,std::any> evt_data;
+          evt_data["/jungfrau/test"]=dat_to_write;
+          small_data.event(evt_data, shape);
+        }
         if (total_events && static_cast<size_t>(ds.size()*n_events) >= total_events) {
           break;
         }

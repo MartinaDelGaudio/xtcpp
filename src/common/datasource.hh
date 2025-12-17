@@ -1,8 +1,8 @@
 #ifndef XTCPP_BASE_DATASOURCE_HH
 #define XTCPP_BASE_DATASOURCE_HH
 
-#include "detector.hh"
-#include "bd_reader.hh"
+#include "common/bd_reader.hh"
+#include "common/detector.hh"
 
 #include "xtcdata/xtc/Dgram.hh"
 
@@ -89,8 +89,16 @@ namespace XTCPP {
 
       /**
        * A map of detector name to BDReaders (in turn wrapping the XTC2 files.)
+       * These readers are being used for L1Accept reading ("normal" event data.)
        */
-      std::map<std::string,std::vector<std::shared_ptr<BDReader>>> m_xtc_readers;
+      std::map<std::string,std::vector<std::shared_ptr<BDReader>>> m_l1_xtc_readers;
+
+      /**
+       * A map of detector name to BDReaders (in turn wrapping the XTC2 files.)
+       * These readers are being used for SlowUpdate reading (I.e. EPICS data.)
+       */
+      std::map<std::string, std::vector<std::shared_ptr<BDReader>>> m_epics_xtc_readers;
+
       /**
        * The subset of BDReaders from the whole which are actually in use by the
        * application code.

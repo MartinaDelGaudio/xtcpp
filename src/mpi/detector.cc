@@ -1,5 +1,6 @@
-#include "../common/detector.hh"
 #include "detector.hh"
+
+#include "common/detector.hh"
 
 #include "xtcdata/xtc/Dgram.hh"
 
@@ -22,12 +23,27 @@ namespace XTCPP {
                        std::string serial_no,
                        std::vector<unsigned> segment_nos,
                        std::vector<std::shared_ptr<Base::BDReader>> xtc_readers,
-		       std::string experiment,
-		       std::string run)
-      : Base::Detector(detname, serial_no, segment_nos, xtc_readers, experiment, run)
+                       std::string experiment,
+                       std::string run,
+                       bool is_epics,
+                       bool is_scan)
+      : Base::Detector(detname,
+                       serial_no,
+                       segment_nos,
+                       xtc_readers,
+                       experiment,
+                       run,
+                       is_epics,
+                       is_scan)
       , m_comm(comm)
     {
       init_resources();
+    }
+
+    Detector::~Detector() {
+      if (!m_is_epics && !m_is_scan) {
+        MPI_Win_free(&m_calibconst_win);
+      }
     }
 
     void Detector::init_resources() {
@@ -44,7 +60,7 @@ namespace XTCPP {
       if (!m_short_name.empty()) {
         size_t window_size{0};
         if (m_shmem_rank == 0) {
-	  load_all_calib_constants();
+          load_all_calib_constants();
           window_size = sizeof(std::float32_t)*2*m_calibconst.size();
         }
         MPI_Win_allocate_shared(window_size,
@@ -54,7 +70,7 @@ namespace XTCPP {
                                 &m_const_ptr,
                                 &m_calibconst_win);
 
-	size_t n_constants = window_size;
+        size_t n_constants = window_size;
         if (m_shmem_rank != 0) {
           MPI_Aint query_size;
           int disp_unit;
@@ -63,10 +79,10 @@ namespace XTCPP {
                                &query_size,
                                &disp_unit,
                                &m_const_ptr);
-	  n_constants = query_size;
+          n_constants = query_size;
         }
-	// Has the window size currently, which is in bytes
-	n_constants = n_constants / (sizeof(std::float32_t)*2);
+        // Has the window size currently, which is in bytes
+        n_constants = n_constants / (sizeof(std::float32_t)*2);
         MPI_Win_lock_all(0, m_calibconst_win);
         if (m_shmem_rank == 0) {
           std::copy(m_calibconst.begin(), m_calibconst.end(), m_const_ptr);

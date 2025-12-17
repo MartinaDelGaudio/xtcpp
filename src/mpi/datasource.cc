@@ -1,7 +1,9 @@
 #include "datasource.hh"
-#include "detector.hh"
-#include "../common/detector.hh"
+
 #include "bd_reader.hh"
+#include "detector.hh"
+
+#include "common/detector.hh"
 
 #include "mpi.h"
 
@@ -39,8 +41,7 @@ namespace XTCPP {
                        &m_idx_window     /* Window */
       );
       if (m_rank == 0) {
-        // This is okay because it gets allocated above and is not null on rank
-        // 0
+        // This is okay because it gets allocated above and is not null on rank 0
         *m_curr_idx = 0;
       }
       m_offset_indices.resize(m_events_per_read);
@@ -72,10 +73,17 @@ namespace XTCPP {
                                                                               xtc_path,
                                                                               m_events_per_read);
           for (const auto& detname : reader->detnames()) {
-            if (m_xtc_readers.find(detname) == m_xtc_readers.end()) {
-              m_xtc_readers[detname] = {reader};
+            if (m_l1_xtc_readers.find(detname) == m_l1_xtc_readers.end()) {
+              m_l1_xtc_readers[detname] = {reader};
             } else {
-              m_xtc_readers[detname].push_back(reader);
+              m_l1_xtc_readers[detname].push_back(reader);
+            }
+          }
+          if (!reader->epics_detnames().empty()) {
+            for (const auto& detname : reader->epics_detnames()) {
+              if (m_epics_xtc_readers.find(detname) == m_epics_xtc_readers.end()) {
+                m_epics_xtc_readers[detname] = {reader};
+              }
             }
           }
         }
@@ -83,10 +91,25 @@ namespace XTCPP {
     }
 
     std::shared_ptr<Base::Detector> DataSource::detector(std::string detname) {
-      if (m_xtc_readers.find(detname) == m_xtc_readers.end()) {
-        throw std::runtime_error("Unknown detector type " + detname + "!");
+      bool is_epics {false};
+      bool is_scan {false};
+      if (detname == "scan") {
+        is_scan = true;
+      } else if (m_l1_xtc_readers.find(detname) == m_l1_xtc_readers.end()) {
+        if (m_epics_xtc_readers.find(detname) == m_epics_xtc_readers.end()) {
+          throw std::runtime_error("Unknown detector type " + detname + "!");
+        }
+        is_epics = true;
       }
-      std::vector<std::shared_ptr<Base::BDReader>> det_readers = m_xtc_readers[detname];
+      std::vector<std::shared_ptr<Base::BDReader>> det_readers;
+      if (is_scan) {
+        // The scan detector will be in the same file as the timing detector
+        det_readers = m_l1_xtc_readers[detname];
+      } else if (is_epics) {
+        det_readers = m_epics_xtc_readers[detname];
+      } else {
+        det_readers = m_l1_xtc_readers[detname];
+      }
       std::vector<unsigned> segments;
       std::vector<std::string> serial_nos;
       std::string det_type{""};
@@ -94,35 +117,51 @@ namespace XTCPP {
       // Segments may not be in order so capture seg -> serial no in map
       std::map<unsigned, std::string> seg_to_serno;
       for (auto& det_reader : det_readers) {
-        auto det_reader_segs = det_reader->segment_numbers()[detname];
-        auto det_reader_sernos = det_reader->serial_numbers()[detname];
-        // These two should be the same size
-        if (det_reader_segs.size() != det_reader_sernos.size()) {
-          throw std::runtime_error("Number of segments doesn't match number of serial nums.");
+        if (is_epics) {
+          std::string ser_no = "epics1234";
+          unsigned seg_no = 0;
+          seg_to_serno[seg_no] = ser_no;
+          det_type = "epics";
+          serial_nos.push_back(ser_no);
+          segments.push_back(seg_no);
+        } else {
+          auto det_reader_segs = det_reader->segment_numbers()[detname];
+          auto det_reader_sernos = det_reader->serial_numbers()[detname];
+          // These two should be the same size
+          if (det_reader_segs.size() != det_reader_sernos.size()) {
+            throw std::runtime_error("Number of segments doesn't match number of serial nums.");
+          }
+          segments.insert(segments.end(),
+                          det_reader_segs.begin(),
+                          det_reader_segs.end());
+          serial_nos.insert(serial_nos.end(),
+                            det_reader_sernos.begin(),
+                            det_reader_sernos.end());
+          for (size_t idx = 0; idx < det_reader_segs.size(); ++idx) {
+            unsigned seg_no = det_reader_segs[idx];
+            std::string serno = det_reader_sernos[idx];
+            seg_to_serno[seg_no] = serno;
+          }
         }
-        segments.insert(segments.end(),
-                        det_reader_segs.begin(),
-                        det_reader_segs.end());
-        serial_nos.insert(serial_nos.end(),
-                          det_reader_sernos.begin(),
-                          det_reader_sernos.end());
-        for (size_t idx = 0; idx < det_reader_segs.size(); ++idx) {
-          unsigned seg_no = det_reader_segs[idx];
-          std::string serno = det_reader_sernos[idx];
-          seg_to_serno[seg_no] = serno;
-        }
-        size_t n_new_offsets = det_reader->get_next_offsets();
-        if (n_new_offsets > m_last_offset_index + 1) {
-          m_last_offset_index = n_new_offsets - 1;
-        }
-        m_xtc_readers_in_use.push_back(det_reader);
+        auto ret = det_reader->get_next_offsets();
+        if (ret.has_value()) {
+          size_t n_new_offsets = ret.value();
+          if (n_new_offsets > m_last_offset_index + 1) {
+            m_last_offset_index = n_new_offsets - 1;
+          }
 
-	if (det_type.empty()) {
-	  det_type = det_reader->det_types()[detname];
-	}
+          m_xtc_readers_in_use.push_back(det_reader);
+          m_logger->trace("Detector " + detname + " will read " + det_reader->xtc_path() +
+                          " and " + det_reader->smd_path());
+        } else {
+          // Handle errors?
+        }
+
+        if (det_type.empty()) {
+          det_type = det_reader->det_types()[detname];
+        }
       }
 
-      //std::string full_serial_no = serial_nos[0];
       // Will need to capture the actual detector type, use placeholder for now
       std::string full_serial_no = det_type;
       for (size_t i=0; i<serial_nos.size(); ++i) {
@@ -134,8 +173,10 @@ namespace XTCPP {
                                                                        full_serial_no,
                                                                        segments,
                                                                        det_readers,
-								       m_experiment,
-								       m_run);
+                                                                       m_experiment,
+                                                                       m_run,
+                                                                       is_epics,
+                                                                       is_scan);
       return det;
     }
 

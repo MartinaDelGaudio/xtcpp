@@ -1,5 +1,6 @@
-#include "smd_reader.hh"
+#include "common/smd_reader.hh"
 
+#include "smd_reader.hh"
 #include "xtcdata/xtc/DescData.hh"
 #include "xtcdata/xtc/NamesLookup.hh"
 #include "xtcdata/xtc/ShapesData.hh"
@@ -8,12 +9,13 @@
 #include "spdlog/sinks/stdout_color_sinks.h"
 
 #include <algorithm>
+#include <exception>
+#include <expected>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <string>
-
-using namespace XtcData;
+#include <utility>
 
 namespace XTCPP {
 
@@ -26,59 +28,38 @@ namespace XTCPP {
       , m_max_dgram_size(max_dgram_size)
     {
       if (auto tmp = spdlog::get("Base::SMDReader")) {
-	m_logger = tmp;
+        m_logger = tmp;
       } else {
-	m_logger = spdlog::stdout_color_mt("Base::SMDReader");
+        m_logger = spdlog::stdout_color_mt("Base::SMDReader");
       }
     }
 
-    void SMDReader::process_data(XtcData::Xtc* xtc,
-                                 std::shared_ptr<XtcOffset[]> external_buf) {
-
-
-      auto char_ptr = reinterpret_cast<char*>(xtc);
-      auto offset_ptr = reinterpret_cast<uint64_t*>(char_ptr + m_offset_in_l1accept_payload);
-      auto offset = *offset_ptr;
-      auto size = *(offset_ptr + 1);
-
-      // We only care about the side effect of constructing in memory here
-      m_curr_offset_idx = m_curr_offset_idx % m_events_per_read;
-      new (external_buf.get() + m_curr_offset_idx) XtcOffset(offset, size);
-      m_curr_offset_idx++;
-    }
-
-    void SMDReader::process_data(XtcData::Xtc* xtc,
-                                 XtcData::TransitionId::Value transition_id) {
-      int remaining = xtc->sizeofPayload();
-      XtcData::Xtc* subxtc = reinterpret_cast<XtcData::Xtc*>(xtc->payload());
-      while (remaining > 0) {
-        process_data_internal(subxtc, transition_id);
-        remaining -= subxtc->sizeofPayload() + sizeof(XtcData::Xtc);
-        subxtc = subxtc->next();
-      }
-    }
-
-    void SMDReader::process_data_internal(XtcData::Xtc* xtc,
-                                          XtcData::TransitionId::Value transition_id) {
+    void SMDReader::inspect_xtc(XtcData::Xtc* xtc,
+                                XtcData::TransitionId::Value transition_id) {
       switch (xtc->contains.id()) {
       case (XtcData::TypeId::Parent): {
-        process_data(xtc, transition_id);
+        recurse_dgram_xtcs(xtc, transition_id);
         break;
       }
       case (XtcData::TypeId::Names): {
-        XtcData::Names& names = *reinterpret_cast<Names*>(xtc);
+        XtcData::Names& names = *reinterpret_cast<XtcData::Names*>(xtc);
         std::string detname = names.detName();
-	std::string dettype = names.detType();
+        std::string dettype = names.detType();
         if (transition_id == XtcData::TransitionId::Configure && // Shouldn't be needed
             detname != "runinfo" &&
             detname != "chunkinfo" &&
-            detname != "epicsinfo" &&
+            detname != "epicsinfo" && // TODO: Revisit to support EPICS
             detname != "triginfo") {
           unsigned seg_no = names.segment();
           std::string ser_no = names.detId();
+          if (detname == "epics") {
+            for (size_t i=0; i<names.num(); ++i) {
+              m_epics_detnames.emplace_back(names.get(i).name());
+            }
+          }
           if (std::find(m_detnames.begin(), m_detnames.end(), detname) == m_detnames.end()) {
             m_detnames.push_back(detname);
-	    m_det_types[detname] = dettype;
+            m_det_types[detname] = dettype;
           }
           if (m_segment_nos.find(detname) != m_segment_nos.end()) {
             auto& det_segs = m_segment_nos[detname];
@@ -103,10 +84,30 @@ namespace XTCPP {
           std::map<unsigned,XtcData::NameIndex> det_seg_map_tmp;
           det_alg_map.try_emplace(alg.name(), det_seg_map_tmp);
           auto& det_seg_map = det_alg_map[alg.name()];
-          det_seg_map.try_emplace(seg_no,NameIndex(names));
+          det_seg_map.try_emplace(seg_no, XtcData::NameIndex(names));
+
+          if (m_det_algs.find(detname) != m_det_algs.end()) {
+            m_det_algs[detname].push_back(alg.name());
+          } else {
+            m_det_algs[detname] = {alg.name()};
+          }
+
+          std::vector<DataField> fields;
+          for (size_t i = 0; i < names.num(); ++i) {
+            auto field_name = names.get(i);
+            fields.emplace_back(field_name.name(), field_name.type(), field_name.rank());
+          }
+          if (m_det_alg_fields.find(detname) != m_det_alg_fields.end()) {
+            auto& alg_fields = m_det_alg_fields[detname];
+            alg_fields[std::make_pair(alg.name(),alg.version())] = fields;
+          } else {
+            std::map<std::pair<std::string,unsigned>,std::vector<DataField>> alg_fields;
+            alg_fields[std::make_pair(alg.name(),alg.version())] = fields;
+            m_det_alg_fields[detname] = alg_fields;
+          }
         }
         XtcData::NamesId& names_id = names.namesId();
-        m_names_lookup[names_id] = NameIndex(names);
+        m_names_lookup[names_id] = XtcData::NameIndex(names);
         break;
       }
       case (XtcData::TypeId::ShapesData): {
@@ -116,10 +117,6 @@ namespace XTCPP {
           XtcData::DescData descdata(shapesdata, m_names_lookup[namesid]);
 
           m_curr_offset_idx = m_curr_offset_idx % m_events_per_read;
-          auto pos_it = m_offsets.begin() + m_curr_offset_idx;
-          m_offsets.emplace(pos_it,
-                            descdata.get_value<uint64_t>(static_cast<int>(0)),
-                            descdata.get_value<uint64_t>(static_cast<int>(1)));
           m_curr_offset_idx++;
         }
         break;
@@ -129,19 +126,121 @@ namespace XTCPP {
       }
       }
     }
+    void SMDReader::extract_offset_from_dgram_into(XtcData::Xtc* xtc,
+                                                   std::shared_ptr<BDXtcOffset[]> external_buf) {
 
-    XtcData::Dgram* SMDReader::next(std::shared_ptr<XtcOffset[]> external_buf) {
-      Dgram& dg = *reinterpret_cast<XtcData::Dgram*>(m_access_ptr + m_access_offset);
+
+      auto char_ptr = reinterpret_cast<char*>(xtc);
+      auto offset_ptr = reinterpret_cast<uint64_t*>(char_ptr + m_offset_in_l1accept_payload);
+      auto offset = *offset_ptr;
+      auto size = *(offset_ptr + 1);
+
+      // We only care about the side effect of constructing in memory here
+      m_curr_offset_idx = m_curr_offset_idx % m_events_per_read;
+      new (external_buf.get() + m_curr_offset_idx) BDXtcOffset(offset, size);
+      m_curr_offset_idx++;
+    }
+
+    void SMDReader::recurse_dgram_xtcs(XtcData::Xtc* xtc,
+                                       XtcData::TransitionId::Value transition_id) {
+      int remaining = xtc->sizeofPayload();
+      XtcData::Xtc* subxtc = reinterpret_cast<XtcData::Xtc*>(xtc->payload());
+      while (remaining > 0) {
+        inspect_xtc(subxtc, transition_id);
+        remaining -= subxtc->sizeofPayload() + sizeof(XtcData::Xtc);
+        subxtc = subxtc->next();
+      }
+    }
+
+    XtcData::Dgram* SMDReader::get_offset_into(std::shared_ptr<BDXtcOffset[]> external_buf,
+                                               std::shared_ptr<TransitionXtcOffset[]> transition_buf) {
+      XtcData::Dgram& dg = *reinterpret_cast<XtcData::Dgram*>(m_access_ptr + m_access_offset);
       size_t payload_size = dg.xtc.sizeofPayload();
       if (payload_size > static_cast<size_t>(m_file_size)) {
         return nullptr;
       }
 
       if (dg.service() == XtcData::TransitionId::L1Accept) {
-        process_data(&dg.xtc, external_buf);
+        extract_offset_from_dgram_into(&dg.xtc, external_buf);
+        m_last_l1_idx_seen++;
+      //} else if (dg.service() == XtcData::TransitionId::SlowUpdate) {
+      } else {
+        m_curr_transition_index = m_curr_transition_index % m_events_per_read;
+        uint64_t size = sizeof(dg) + payload_size;
+        // Get the current offset. We've read m_read_count and updated m_file_offset
+        // So to find the offset of the datagram revert m_file_offset by bytes read
+        // and then add in the offset we are currently at.
+
+        uint64_t offset;
+        if (m_last_l1_idx_seen < 0) {
+          // Have seen nothing but transitions... Then the smd file_offset can be used
+          // This is because entire transitions are also stored in .smd.xtc2 files
+          // If we have yet to see an L1Accept, then the offset in .smd.xtc2 is equal
+          // to the offset in .xtc2
+          /// TODO: The above actually doesn't seem to be true!!! Investigate why!
+          /// The Configure Transition size doesn't match between the .smd.xtc2
+          /// and .xtc2 files... The others do at least as far as I can tell.
+          /// For now, the BDReader must do some hackery if prev_l1 is -1. It will then
+          /// Calculate based on the size (which IS accurate at least) and the first
+          /// L1Accept offset what the correct SlowUpdate offset should be...
+          offset = (m_file_offset - m_read_count) + m_access_offset;
+        } else if (m_curr_offset_idx != 0) {
+          // Have seen L1 (and not wrapped)... Can use previous L1 offset+size
+          // But... Have to see if any other previous transitions as well
+          BDXtcOffset prev_l1 = external_buf[m_curr_offset_idx - 1];
+          offset = prev_l1.offset + prev_l1.size;
+          size_t prev_transition_idx = m_curr_transition_index - 1;
+          TransitionXtcOffset prev_transition = transition_buf[prev_transition_idx];
+          while (prev_transition.previous_l1_index == m_last_l1_idx_seen) {
+            offset += prev_transition.size;
+            prev_transition_idx--;
+            prev_transition = transition_buf[prev_transition_idx];
+          }
+        } else {
+          // We wrapped and the first item is a SlowUpdate...
+          // TODO: Find a better approach...
+          // Living dangerously for now... Assume they didn't clear the memory
+          // and we will use the offset at the end of the buffer...
+          BDXtcOffset prev_l1 = external_buf[m_events_per_read-1];
+          offset = prev_l1.offset + prev_l1.size;
+        }
+        new (transition_buf.get() + m_curr_transition_index)
+          TransitionXtcOffset(m_last_l1_idx_seen, offset, size, dg.service());
+        m_curr_transition_index++;
+
+        if (dg.service() == XtcData::TransitionId::EndRun) {
+          m_seen_end_run = true;
+        }
       }
       m_access_offset += sizeof(dg) + payload_size;
       return &dg;
+    }
+
+    std::expected<BDXtcOffset, SMDReadError> SMDReader::get_offset() {
+      XtcData::Dgram& dg = *reinterpret_cast<XtcData::Dgram*>(m_access_ptr + m_access_offset);
+      size_t payload_size = dg.xtc.sizeofPayload();
+      if (payload_size > static_cast<size_t>(m_file_size)) {
+        return std::unexpected(SMDReadError::PayloadTruncatedError);
+      }
+
+      m_access_offset += sizeof(dg) + payload_size;
+      if (dg.service() == XtcData::TransitionId::L1Accept) {
+        //process_data(&dg.xtc, external_buf);
+        auto char_ptr = reinterpret_cast<char*>(&dg.xtc);
+        auto offset_ptr =
+          reinterpret_cast<uint64_t*>(char_ptr + m_offset_in_l1accept_payload);
+        auto offset = *offset_ptr;
+        auto size = *(offset_ptr + 1);
+        // NOTE: We always keep track of the number of offsets read.
+        // It is up to the caller to keep track which offsets are read into an external
+        // buffer (using get_offset_into) and which are not (i.e. read using
+        // this function). If use is mixed, the external buffer could have gaps.
+        m_curr_offset_idx = m_curr_offset_idx % m_events_per_read;
+        m_curr_offset_idx++;
+        return BDXtcOffset(offset, size);
+        //return std::make_optional(BDXtcOffset(offset,size));
+      }
+      return std::unexpected(SMDReadError::NoOffsetInData);
     }
   } // namespace Base
 } // namespace XTCPP

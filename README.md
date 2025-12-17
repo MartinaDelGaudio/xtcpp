@@ -190,8 +190,8 @@ These classes are defined in each implementation in their respective namespaces.
 In priority order the current features and improvements to work on are:
 
 1. Finish calibration constants selection and make `calibrate` function general (only works on jungfrau).
-2. "Live mode" support to allow reading XTC2 files as they are written.
-3. Scans - support the DAQ scans.
-4. epics - `PvaDetector` should be semi-supported; however, `epicsArch` is not.
-5. Finish the HDF5 writing implementation.
+2. Fix-up and expand Python bindings.
+  - Additions for EPICS and scan detectors have made the Python bindings non-functional/incomplete.
+3. "Live mode" support to allow reading XTC2 files as they are written.
+4. Finish the HDF5 writing implementation.
 

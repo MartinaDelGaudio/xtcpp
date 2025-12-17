@@ -26,10 +26,11 @@ namespace XTCPP {
                std::string serial_no,
                std::vector<unsigned> segment_nos,
                std::vector<std::shared_ptr<Base::BDReader>> xtc_readers,
-	       std::string experiment,
-	       std::string run);
-
-      XtcData::Dgram* operator()(size_t offset_idx);
+               std::string experiment,
+               std::string run,
+               bool is_epics,
+               bool is_scan);
+      ~Detector();
 
     private:
       MPI_Comm m_comm;
