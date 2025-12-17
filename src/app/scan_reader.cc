@@ -90,8 +90,12 @@ int main(int argc, char* argv[]) {
       std::chrono::steady_clock::now();
 
     std::cout << "Scan detector has algorithms and fields: ";
-    for (auto& [alg_name, fields] : scan_det->alg_fields()) {
-      std::cout << std::endl << " - " << alg_name;
+    for (auto& [alg_info, fields] : scan_det->alg_fields()) {
+      auto [alg_name, alg_version] = alg_info;
+      std::cout << std::endl
+                << " - " << alg_name << " (Version: 0x" << std::setw(6)
+                << std::setfill('0') << std::hex << alg_version << std::dec
+                << ")";
       for (auto field : fields) {
         std::cout << std::endl << "   - " << field.name << " (Rank: " << field.rank
                   << ", Type: " << field.data_type << ")";
@@ -103,10 +107,11 @@ int main(int argc, char* argv[]) {
     int n_events{0};
 
     for (auto it=ds.begin(); it != ds.end(); it++) {
-      auto raw_det  = scan_det->get_scan_data(*it, "raw", "step_value");
+      auto ret  = scan_det->get_scan_data(*it, "raw", "step_value");
+      auto [raw_det, rank, shape] = ret;
       if (print) {
         if (raw_det) {
-          std::cout << "Value is: " << *reinterpret_cast<int64_t*>(raw_det) << std::endl;
+          std::cout << "Value is: " << **reinterpret_cast<int64_t**>(raw_det) << std::endl;
         }
       }
       n_events++;

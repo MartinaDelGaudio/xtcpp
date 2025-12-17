@@ -1,5 +1,6 @@
 #include "common/bd_reader.hh"
 
+#include "bd_reader.hh"
 #include "common/smd_reader.hh"
 
 #include "xtcdata/xtc/DescData.hh"
@@ -15,7 +16,6 @@
 #include <memory>
 #include <string>
 #include <tuple>
-#include <utility>
 
 namespace XTCPP {
   namespace Base {
@@ -37,10 +37,11 @@ namespace XTCPP {
 
     BDReader::~BDReader() {}
 
-    std::pair<void*, size_t> BDReader::get_data(const std::string& detname,
-                                                 const unsigned& seg_no,
-                                                 const std::string& alg,
-                                                 const std::string& data_name) {
+    std::tuple<void*, size_t, uint32_t, uint32_t*>
+    BDReader::get_data(const std::string& detname,
+                       const unsigned& seg_no,
+                       const std::string& alg,
+                       const std::string& data_name) {
       if (m_offsets_in_dg.find(detname) != m_offsets_in_dg.end()) {
         SegAlgData seg_alg_data = std::make_tuple(seg_no, alg, data_name);
         if (m_offsets_in_dg[detname].find(seg_alg_data) != m_offsets_in_dg[detname].end()) {
@@ -49,7 +50,7 @@ namespace XTCPP {
           void* data_ptr = reinterpret_cast<void*>(char_ptr + offset.offset);
           size_t data_size = offset.size;
 
-          return std::make_pair(data_ptr, data_size);
+          return std::make_tuple(data_ptr, data_size, offset.rank, offset.shape);
         }
       }
       return get_data_internal(detname, seg_no, alg, data_name);
@@ -57,18 +58,19 @@ namespace XTCPP {
 
     void BDReader::close() {}
 
-    std::pair<void*,size_t> BDReader::get_data_internal(const std::string& detname,
-                                                        const unsigned& seg_no,
-                                                        const std::string& alg,
-                                                        const std::string& data_name) {
+    std::tuple<void*,size_t, uint32_t, uint32_t*>
+    BDReader::get_data_internal(const std::string& detname,
+                                const unsigned& seg_no,
+                                const std::string& alg,
+                                const std::string& data_name) {
       m_logger->debug("Looking up data for " + detname + " segment " +
                       std::to_string(seg_no) + ": " + alg + "." + data_name +
                       ". The offset will be cached for faster lookup next time.");
       SegAlgData seg_alg_data = std::make_tuple(seg_no, alg, data_name);
 
-      BDXtcOffset offset_placeholder(0,0);
+      DataInDgramOffset offset_placeholder;
 
-      std::map<SegAlgData, BDXtcOffset> placeholder;
+      std::map<SegAlgData, DataInDgramOffset> placeholder;
       m_offsets_in_dg.try_emplace(detname, placeholder);
       auto& det_offset_map = m_offsets_in_dg[detname];
       det_offset_map.try_emplace(seg_alg_data, offset_placeholder);
@@ -141,12 +143,16 @@ namespace XTCPP {
             char* data_addr = selected_data.payload() + single_shapes_offset;
             void* data_ptr = reinterpret_cast<void*>(data_addr);
 
+            uint32_t rank = name.rank();
+            uint32_t* shape{nullptr};
             size_t offset = data_addr - starting_ptr;
             size_t data_size{0};
-            if (name.rank() == 0) {
+            if (rank == 0) {
               data_size = XtcData::Name::get_element_size(name.type());
             } else {
-              data_size = shapesdata.shapes().get(shape_index).size(name);
+              auto& shape_obj = shapesdata.shapes().get(shape_index);
+              data_size = shape_obj.size(name);
+              shape = shape_obj.shape();
             }
 
             // Unfortunately, for EPICS this lookup table is somewhat unintuitive
@@ -154,7 +160,11 @@ namespace XTCPP {
             // being "epics"
             seg_alg_data_offset.offset = offset;
             seg_alg_data_offset.size = data_size;
-            return std::make_pair(data_ptr, data_size);
+            seg_alg_data_offset.rank = rank;
+            for (size_t i=0; i<rank; ++i) {
+              seg_alg_data_offset.shape[i] = shape[i];
+            }
+            return std::make_tuple(data_ptr, data_size, rank, shape);
           }
           remaining_payload -= payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
           payload_ptr = payload_ptr->next();

@@ -17,6 +17,7 @@
 #include <span>
 #include <stdfloat>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -109,9 +110,8 @@ namespace XTCPP {
        *              an unstructured pointer to the underlying set of pointers for
        *              potentially many segments.
        */
-      virtual void* get_l1_data(size_t offset_idx,
-                                const std::string& alg,
-                                const std::string& data_name);
+      virtual std::tuple<void**,uint32_t,uint32_t*>
+      get_l1_data(size_t offset_idx, const std::string& alg, const std::string& data_name);
 
       /**
        * Return the closest SlowUpdate data to the offset index.
@@ -123,7 +123,8 @@ namespace XTCPP {
        * @param[in] offset_idx The index (i.e. event) to retrieve data for.
        * @return data The pointer to the requested SlowUpdate data.
        */
-      virtual void* get_slow_update_data(size_t offset_idx);
+      virtual std::tuple<void**, uint32_t, uint32_t*>
+      get_slow_update_data(size_t offset_idx);
 
       /**
        * Return the closest scan step data to the offset index.
@@ -142,9 +143,8 @@ namespace XTCPP {
        * @param[in] data_name The field/data name within the algorithm.
        * @return data The pointer to the requested scan data.
        */
-      virtual void* get_scan_data(size_t offset_idx,
-                                  const std::string& alg,
-                                  const std::string& data_name);
+      virtual std::tuple<void**, uint32_t, uint32_t*>
+      get_scan_data(size_t offset_idx, const std::string& alg, const std::string& data_name);
 
       /**
        * Access the calibration constants.
@@ -200,8 +200,9 @@ namespace XTCPP {
 
       /**
        * A mapping of field names to the various algorithms.
+       * Algorithm keys are stored as (alg.name(),alg.version()) pairs.
        */
-      std::map<std::string, std::vector<DataField>>
+      std::map<std::pair<std::string,unsigned>, std::vector<DataField>>
       alg_fields() const { return m_det_alg_fields; }
 
     protected:
@@ -313,7 +314,8 @@ namespace XTCPP {
       /**
        * A mapping of field names to the various algorithms.
        */
-      std::map<std::string, std::vector<DataField>> m_det_alg_fields;
+      std::map<std::pair<std::string, unsigned>, std::vector<DataField>>
+      m_det_alg_fields;
 
       /**
        * Keeps track of the last index data was read for. Since a `get_data_..`
@@ -326,12 +328,17 @@ namespace XTCPP {
 
     private:
       std::optional<ThreadPool> m_thread_pool;
-      using GetDataFn = void* (Detector::*)(size_t,
-                                            const std::string&,
-                                            const std::string&);
+      using GetDataFn =
+        std::tuple<void**, uint32_t, uint32_t*> (Detector::*)(size_t,
+                                                             const std::string&,
+                                                             const std::string&);
+
       GetDataFn get_l1_data_impl;
-      void* get_l1_data_threaded(size_t, const std::string&, const std::string&);
-      void* get_l1_data_sequential(size_t, const std::string&, const std::string&);
+      std::tuple<void**, uint32_t, uint32_t*>
+      get_l1_data_threaded(size_t, const std::string&, const std::string&);
+
+      std::tuple<void**, uint32_t, uint32_t*>
+      get_l1_data_sequential(size_t, const std::string&, const std::string&);
     };
   } // namespace Base
 }

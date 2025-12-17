@@ -104,7 +104,7 @@ namespace XTCPP
 
   using DetAlgList = std::map<std::string, std::vector<std::string>>;
   using DetAlgDataList = std::map<std::string,
-                                  std::map<std::string,
+                                  std::map<std::pair<std::string,unsigned>,
                                            std::vector<DataField>>>;
   using AlgDataNameIndex = std::map<std::string, std::map<std::string, std::map<unsigned, XtcData::NameIndex>>>;
   namespace Base {
@@ -260,8 +260,8 @@ namespace XTCPP
       void recurse_dgram_xtcs(XtcData::Xtc* xtc,
                               XtcData::TransitionId::Value transition_id);
     private:
-      void extract_offset_from_dgram_into(
-          XtcData::Xtc* xtc, std::shared_ptr<BDXtcOffset[]> external_buf);
+      void extract_offset_from_dgram_into(XtcData::Xtc* xtc,
+                                          std::shared_ptr<BDXtcOffset[]> external_buf);
 
       void inspect_xtc(XtcData::Xtc* xtc,
                        XtcData::TransitionId::Value transition_id);

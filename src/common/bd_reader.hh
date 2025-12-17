@@ -16,7 +16,6 @@
 #include <memory>
 #include <string>
 #include <tuple>
-#include <utility>
 #include <vector>
 
 namespace XTCPP {
@@ -27,6 +26,30 @@ namespace XTCPP {
     AllDgramOffsetsRead,
     GeneralIOError
   };
+
+#pragma pack(push, 1)
+  struct DataInDgramOffset {
+    DataInDgramOffset(uint64_t offset_, uint64_t size_, uint32_t rank_, uint32_t* shape_)
+      : offset(offset_)
+      , size(size_)
+      , rank(rank_)
+    {
+      for (size_t i=0; i<rank; ++i) {
+        shape[i] = shape_[i];
+      }
+    }
+    DataInDgramOffset()
+      : offset(0)
+      , size(0)
+      , rank(0)
+      , shape{0,0,0,0,0,0,0,0,0,0}
+    {}
+    uint64_t offset;
+    uint64_t size;
+    uint32_t rank;
+    uint32_t shape[10];
+  };
+#pragma pack(pop)
 
   // A tuple of segment number, algorithm, and data field within the algorithm
   using SegAlgData = std::tuple<unsigned, std::string, std::string>;
@@ -150,13 +173,15 @@ namespace XTCPP {
        * @param[in] seg_no The segment number for the detector.
        * @param[in] alg The algorithm, e.g. `raw`.
        * @param[in] data_name The field/data name within the algorithm. E.g. `raw`.
-       * @return data_and_size The pair of a pointer to the requested data and the
-       *         size of that data in bytes. The pointer may be nullptr if not found, etc.
+       * @return data_size_rank_shape The tuple of a pointer to the requested data,
+       *         the size of that data in bytes, the rank and shape. The pointer
+       *         may be nullptr if not found, etc.
        */
-      virtual std::pair<void*, size_t> get_data(const std::string& detname,
-                                                const unsigned& seg_no,
-                                                const std::string& alg,
-                                                const std::string& data_name);
+      virtual std::tuple<void*, size_t, uint32_t, uint32_t*>
+      get_data(const std::string& detname,
+               const unsigned& seg_no,
+               const std::string& alg,
+               const std::string& data_name);
 
       /**
        * A pointer to the offsets being used to read L1Accept datagrams.
@@ -263,14 +288,15 @@ namespace XTCPP {
        * @param[in] seg_no The segment number for the detector.
        * @param[in] alg The algorithm, e.g. `raw`.
        * @param[in] data_name The field/data name within the algorithm. E.g. `raw`.
-       * @return data_and_size The pair of a pointer to the requested data and
-       * the size of that data in bytes. The pointer may be nullptr if not
-       * found, etc.
+       * @return data_size_rank_shape The tuple of a pointer to the requested data,
+       *         the size of that data in bytes, the rank and shape. The pointer
+       *         may be nullptr if not found, etc.
        */
-      std::pair<void*, size_t> get_data_internal(const std::string& detname,
-                                                 const unsigned& seg_no,
-                                                 const std::string& alg,
-                                                 const std::string& data_name);
+      std::tuple<void*, size_t, uint32_t, uint32_t*>
+      get_data_internal(const std::string& detname,
+                        const unsigned& seg_no,
+                        const std::string& alg,
+                        const std::string& data_name);
 
       /**
        * Extract a value from an XTC by looking at the type/rank/size
@@ -333,7 +359,7 @@ namespace XTCPP {
        * datagram. This assumes consistent size of data. This is valid for
        * some algorithms but not all.
        */
-      std::map<std::string, std::map<SegAlgData, BDXtcOffset>> m_offsets_in_dg;
+      std::map<std::string, std::map<SegAlgData, DataInDgramOffset>> m_offsets_in_dg;
 
       std::vector<std::string> m_epics_detnames;
 

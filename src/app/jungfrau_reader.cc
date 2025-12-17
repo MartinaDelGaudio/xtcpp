@@ -112,8 +112,9 @@ int main(int argc, char* argv[]) {
       //std::cout << "Event offset index: " << *it << " [Rank: " << ds.rank() << "]" << std::endl;
       //auto dg_epix100 = epix100(*it);
       //auto dg_jungfrau = jungfrau(*it);
-      [[maybe_unused]] auto raw_epix100  = epix100->get_l1_data(*it,"raw","raw");
-      auto raw_jungfrau = jungfrau->get_l1_data(*it,"raw","raw");
+      [[maybe_unused]] auto ret_epix100  = epix100->get_l1_data(*it,"raw","raw");
+      auto ret_jungfrau = jungfrau->get_l1_data(*it,"raw","raw");
+      auto [raw_jungfrau, rank_jungfrau, shape_jungfrau] = ret_jungfrau;
 
       if (run_calib && raw_jungfrau) {
         //auto calib_jungfrau = XTCPP::calibrate(jungfrau->data_ptrs(), jungfrau->calibconst_span());

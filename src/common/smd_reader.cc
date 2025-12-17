@@ -99,10 +99,10 @@ namespace XTCPP {
           }
           if (m_det_alg_fields.find(detname) != m_det_alg_fields.end()) {
             auto& alg_fields = m_det_alg_fields[detname];
-            alg_fields[alg.name()] = fields;
+            alg_fields[std::make_pair(alg.name(),alg.version())] = fields;
           } else {
-            std::map<std::string,std::vector<DataField>> alg_fields;
-            alg_fields[alg.name()] = fields;
+            std::map<std::pair<std::string,unsigned>,std::vector<DataField>> alg_fields;
+            alg_fields[std::make_pair(alg.name(),alg.version())] = fields;
             m_det_alg_fields[detname] = alg_fields;
           }
         }
