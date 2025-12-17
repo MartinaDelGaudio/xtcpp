@@ -62,6 +62,10 @@ namespace {
    * }
    * @endcode
    *
+   * NOTE: Unfortunately it seems that NumPy does NOT support suboffsets in
+   *       buffers. At least the versions we use frequently.
+   * TODO: Investigate an alternative then.
+   *
    * @param[in] val Raw data pointer. A double pointer since multiple segments
    *            may be located at different places in memory.
    * @param[in] rank The rank/number of dimensions. 0 indicates scalar
@@ -96,16 +100,21 @@ namespace {
                                                 strides));
         }
       } else if (shape[0] <= 1) {
+        // TODO: Rank is not being returned in line with shape from Detector.cc
+        // TODO: Check alignment
         std::vector<size_t> strides(rank-1, sizeof(T));
         std::vector<size_t> arrshape(shape + 1, shape + rank);
-        //std::vector<size_t> arrshape(rank-1);
-        for (size_t i=rank-3; i >= 0; --i) {
-          strides[i] = strides[i+1] * arrshape[i+1];
+        for (ssize_t j = rank - 3; j >= 0; --j) {
+          if (j < 0) {
+            break;
+          }
+          size_t i = static_cast<size_t>(j);
+          strides[i] = strides[i + 1] * arrshape[i + 1];
         }
         return py::array_t<T>(py::buffer_info(reinterpret_cast<T**>(val)[0],
                                               sizeof(T),
                                               py::format_descriptor<T>::format(),
-                                              rank-1,
+                                              rank - 1,
                                               arrshape,
                                               strides));
       }
@@ -257,35 +266,87 @@ namespace {
     py::object py_det = py::cast(det_wrapper);
     auto py_det_setattr = py::getattr(py_det, "__setattr__");
     auto MethodType = py::module_::import("types").attr("MethodType");
-    for (auto [alg_info, fields] : det->alg_fields()) {
-      auto [alg_name, alg_version] = alg_info;
+    if (det->is_epics()) {
       std::shared_ptr<AlgWrapper> alg_wrapper = std::make_shared<AlgWrapper>(det,
-                                                                             alg_name,
-                                                                             alg_version);
-      py::object py_alg = py::cast(alg_wrapper);
-      auto py_alg_setattr = py::getattr(py_alg, "__setattr__");
-      for (auto field : fields) {
-        auto get_field_method =
-          py::cpp_function([field](AlgWrapper& self, size_t evt) -> py::object {
-            auto alg_det = self.det;
-            std::tuple<void**, uint32_t, uint32_t*> ret;
-            if (alg_det->is_epics()) {
-              ret = alg_det->get_slow_update_data(evt);
-            } else if (alg_det->is_scan()) {
-              ret = alg_det->get_scan_data(evt, self.name, field.name);
-            } else {
-              ret = alg_det->get_l1_data(evt, self.name, field.name);
-            }
-            auto [val, rank, shape] = ret;
-            return cast_to_pyobject(val, field.data_type, rank, shape);
-          },
-            py::is_method(py_alg));
-        // MethodType call is hacky mechanism to ensure the method is seen as
-        // bound to the py_alg object. This avoids needing to call it by passing
-        // the instance as the first argument (i.e. `self` is auto-passed)
-        py_alg_setattr(field.name.c_str(), MethodType(get_field_method, py_alg));
+                                                                             "raw",
+                                                                             0x020000);
+      for (auto [alg_info, fields] : det->alg_fields()) {
+        for (auto field: fields) {
+          if (field.name != det->detname()) {
+            continue;
+          }
+          auto get_field_method =
+            py::cpp_function([field](DetectorWrapper& self, size_t evt) -> py::object {
+              auto alg_det = self._det;
+              std::tuple<void**, uint32_t, uint32_t*> ret =
+                alg_det->get_slow_update_data(evt);
+              auto [val, rank, shape] = ret;
+              return cast_to_pyobject(val, field.data_type, rank, shape);
+            },
+              py::is_method(py_det));
+          py_det_setattr("__call__", MethodType(get_field_method, py_det));
+          py_det_setattr("get", MethodType(get_field_method, py_det));
+        }
       }
-      py_det_setattr(alg_name.c_str(), py_alg);
+    } else {
+      for (auto [alg_info, fields] : det->alg_fields()) {
+        auto [alg_name, alg_version] = alg_info;
+        std::shared_ptr<AlgWrapper> alg_wrapper = std::make_shared<AlgWrapper>(det,
+                                                                               alg_name,
+                                                                               alg_version);
+        py::object py_alg = py::cast(alg_wrapper);
+        auto py_alg_setattr = py::getattr(py_alg, "__setattr__");
+        for (auto field : fields) {
+          auto get_field_method =
+            py::cpp_function([field](AlgWrapper& self, size_t evt) -> py::object {
+              auto alg_det = self.det;
+              std::tuple<void**, uint32_t, uint32_t*> ret;
+              if (alg_det->is_scan()) {
+                ret = alg_det->get_scan_data(evt, self.name, field.name);
+              } else {
+                ret = alg_det->get_l1_data(evt, self.name, field.name);
+              }
+              auto [val, rank, shape] = ret;
+              return cast_to_pyobject(val, field.data_type, rank, shape);
+            },
+              py::is_method(py_alg));
+          // MethodType call is hacky mechanism to ensure the method is seen as
+          // bound to the py_alg object. This avoids needing to call it by passing
+          // the instance as the first argument (i.e. `self` is auto-passed)
+          py_alg_setattr(field.name.c_str(), MethodType(get_field_method, py_alg));
+
+          // TODO: Implement a better method for calib method...
+          if (alg_name == "raw" && detname == "jungfrau") {
+            auto calib_method =
+              py::cpp_function([](AlgWrapper& self, size_t evt) -> py::object {
+                auto alg_det = self.det;
+                [[maybe_unused]] auto raw_data = alg_det->get_l1_data(evt,
+                                                                      "raw",
+                                                                      "raw");
+                XTCPP::calibrate(alg_det->data_ptrs(),
+                                 alg_det->calibconst_span(),
+                                 alg_det->calib_data_buf());
+
+                size_t nsegs{32};
+                size_t nrows{512};
+                size_t ncols{1024};
+                std::vector<size_t> shape{nsegs, nrows, ncols};
+                std::vector<size_t> strides(3);
+                strides[2] = sizeof(float);
+                strides[1] = ncols * strides[2];
+                strides[0] = nrows * strides[1];
+                return py::array_t<float>(py::buffer_info(reinterpret_cast<float*>(alg_det->calib_data_buf().data()),
+                                                          sizeof(float),
+                                                          py::format_descriptor<float>::format(),
+                                                          3,
+                                                          shape,
+                                                          strides));
+              });
+            py_alg_setattr("calib", MethodType(calib_method, py_alg));
+          }
+        }
+        py_det_setattr(alg_name.c_str(), py_alg);
+      }
     }
     return py_det;
   }
