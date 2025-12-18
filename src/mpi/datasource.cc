@@ -6,6 +6,8 @@
 #include "common/detector.hh"
 
 #include "mpi.h"
+#include "spdlog/spdlog.h"
+#include "spdlog/sinks/stdout_color_sinks.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -29,6 +31,7 @@ namespace XTCPP {
     {
       MPI_Comm_rank(m_comm, &m_rank);
       MPI_Comm_size(m_comm, &m_n_ranks);
+      m_local_idx = static_cast<size_t>(m_rank);
       size_t win_size{0};
       if (m_rank == 0) {
         win_size = sizeof(MPI_Aint);
@@ -46,6 +49,21 @@ namespace XTCPP {
       }
       m_offset_indices.resize(m_events_per_read);
       std::iota(m_offset_indices.begin(), m_offset_indices.end(), 0);
+
+      if (auto tmp = spdlog::get("MPI::DataSource")) {
+        m_logger = tmp;
+      } else {
+        m_logger = spdlog::stdout_color_mt("MPI::DataSource");
+      }
+
+      const char* fetch_idx_mode = std::getenv("XTCPP_MPIDS_IDXMODE");
+      if (fetch_idx_mode && std::string(fetch_idx_mode) == "FAST") {
+        fetch_next_idx_impl = &DataSource::fetch_next_idx_round_robin;
+        m_logger->debug("Will use the fast deterministic mode for index distribution.");
+      } else {
+        fetch_next_idx_impl = &DataSource::fetch_next_idx_ordered;
+        m_logger->debug("Will use the strict ordered mode for index distribution.");
+      }
 
       init_detectors();
     }
@@ -181,6 +199,10 @@ namespace XTCPP {
     }
 
     size_t DataSource::fetch_next_idx() {
+      return (this->*fetch_next_idx_impl)();
+    }
+
+    size_t DataSource::fetch_next_idx_ordered() {
       MPI_Aint one = 1;
       MPI_Aint curr_idx;
       MPI_Fetch_and_op(
@@ -193,6 +215,11 @@ namespace XTCPP {
         m_idx_window
       );
       return static_cast<size_t>(curr_idx);
+    }
+
+    size_t DataSource::fetch_next_idx_round_robin() {
+      m_local_idx += m_n_ranks;
+      return m_local_idx;
     }
   } // namespace MPI
 } // namespace XTCPP

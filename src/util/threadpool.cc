@@ -54,7 +54,7 @@ namespace XTCPP {
         job.swap(m_jobs.front());
         m_jobs.pop_front();
       } // Release lock
-      m_logger->debug("Attempting to run a queued job.");
+      // m_logger->debug("Attempting to run a queued job.");
       // Run job
       job();
     }

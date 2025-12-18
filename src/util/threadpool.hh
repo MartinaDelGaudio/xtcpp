@@ -44,7 +44,7 @@ namespace XTCPP {
           promise->set_exception(std::current_exception());
         }
       };
-      m_logger->debug("Attempting to queue a job.");
+      // m_logger->debug("Attempting to queue a job.");
       enqueue_impl(std::move(wrapped_job));
       return wrapped_future;
     }

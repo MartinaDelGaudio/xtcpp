@@ -41,7 +41,16 @@ namespace {
   /**
    * Properly convert the scalar or array to a Python object.
    * Scalar and arrays constructed from a single segment are hopefully
-   * self-explanatory. The case of multi-segment arrays is more complicated
+   * self-explanatory.
+   *
+   * NOTE: The intended approach for multi-segment arrays is described here,
+   *       however, it has been abandoned for now. NumPy does not support
+   *       the use of suboffsets - so for now we collapse into an array (which
+   *       sadly requires a copy.) The description for the suboffsets method
+   *       is retained, and some of the required code is left commented in case
+   *       it can be used in the future.
+   *
+   * The case of multi-segment arrays is more complicated
    * since the data for each segment could potentially be anywhere in memory.
    * This is not quite supported directly by pybind11; however, the Python
    * buffer protocol does support it, thankfully, using a concept called
@@ -76,16 +85,15 @@ namespace {
    * @return object The cast Python object.
    */
   template <class T>
-  py::object handle_scalar_or_array(void** val, uint32_t rank, uint32_t* shape) {
+  py::object handle_scalar_or_array(void** val, uint32_t rank, std::vector<uint32_t> shape) {
     if (rank == 0) {
       /* Scalar */
-      return py::cast(**reinterpret_cast<T **>(val));
+      return py::cast(**reinterpret_cast<T**>(val));
     } else {
       size_t n_elements = 1;
       for (size_t i = 0; i < rank; ++i) {
         n_elements *= shape[i];
       }
-      size_t total_bytes = n_elements * sizeof(T);
       if (rank == 1) {
         /* Simpler case - can just de-reference the first pointer */
         std::vector<size_t> strides = {sizeof(T)};
@@ -102,26 +110,45 @@ namespace {
                                                 arrshape,
                                                 strides));
         }
-      } else if (shape[0] <= 1) {
-        // TODO: Rank is not being returned in line with shape from Detector.cc
-        // TODO: Check alignment
-        std::vector<size_t> strides(rank-1, sizeof(T));
-        std::vector<size_t> arrshape(shape + 1, shape + rank);
+      } else {
+        size_t nsegs = static_cast<size_t>(shape[0]);
+        std::vector<size_t> strides(rank - 1, sizeof(T));
+        // NOTE: Do NOT use shape.end() -- the size of the shape vector will be
+        // something like 10. This is to match the "max dimensions" mechanism
+        // used in XtcData. Always use the rank value passed independently to
+        // determine dimensionality.
+        std::vector<size_t> arrshape(shape.begin() + 1, shape.begin() + rank);
         for (ssize_t j = rank - 3; j >= 0; --j) {
-          if (j < 0) {
-            break;
-          }
           size_t i = static_cast<size_t>(j);
           strides[i] = strides[i + 1] * arrshape[i + 1];
         }
-        return py::array_t<T>(py::buffer_info(reinterpret_cast<T**>(val)[0],
-                                              sizeof(T),
-                                              py::format_descriptor<T>::format(),
-                                              rank - 1,
-                                              arrshape,
-                                              strides));
+        if (nsegs <= 1) {
+          return py::array_t<T>(py::buffer_info(reinterpret_cast<T**>(val)[0],
+                                                sizeof(T),
+                                                py::format_descriptor<T>::format(),
+                                                rank - 1,
+                                                arrshape,
+                                                strides));
+        } else {
+          // TODO: Make this multi-segment code not need a copy??
+          py::list segment_arrays;
+          // Boo... this will cause a copy at the end when the segments are put
+          // into a single array :(
+          for (size_t seg=0; seg < nsegs; ++seg) {
+            segment_arrays.append(py::array_t<T>(py::buffer_info(reinterpret_cast<T**>(val)[seg],
+                                                                 sizeof(T),
+                                                                 py::format_descriptor<T>::format(),
+                                                                 rank - 1,
+                                                                 arrshape,
+                                                                 strides)));
+
+          }
+          return py::array_t<T>(segment_arrays);
+        }
       }
       /* Complex case - "PIL" style -- see the actual Python docs for this one */
+      /* Sadly NumPy does not support this :( */
+      /*
       std::vector<Py_ssize_t> strides(rank);
       std::vector<Py_ssize_t> arrshape(shape, shape + rank);
       // Used for pointer math on first dimension
@@ -141,19 +168,19 @@ namespace {
       }
       auto format_str =
         const_cast<char*>(py::format_descriptor<T>::format().c_str());
-
-      Py_buffer buf_info;
-      buf_info.buf = reinterpret_cast<void *>(val); /* Data buffer */
-      buf_info.len = total_bytes;                   /* Total number of bytes */
-      buf_info.itemsize = sizeof(T);                /* Size of 1 element */
-      buf_info.readonly = 1;                        /* Read-only buffer */
-      buf_info.format = format_str;                 /* Format string for type */
-      buf_info.ndim = rank;                         /* Number of dims */
-      buf_info.shape = arrshape.data();             /* Shape of array */
-      buf_info.strides = strides.data();            /* Strides along axes */
-      buf_info.suboffsets = suboffsets.data();      /* Double ptr math stuff */
-      buf_info.internal = nullptr;                  /* Reserved */
-      return py::reinterpret_steal<py::buffer>(PyMemoryView_FromBuffer(&buf_info));
+      */
+      //Py_buffer buf_info;
+      //buf_info.buf = reinterpret_cast<void *>(val); /* Data buffer */
+      //buf_info.len = total_bytes;                   /* Total number of bytes */
+      //buf_info.itemsize = sizeof(T);                /* Size of 1 element */
+      //buf_info.readonly = 1;                        /* Read-only buffer */
+      //buf_info.format = format_str;                 /* Format string for type */
+      //buf_info.ndim = rank;                         /* Number of dims */
+      //buf_info.shape = arrshape.data();             /* Shape of array */
+      //buf_info.strides = strides.data();            /* Strides along axes */
+      //buf_info.suboffsets = suboffsets.data();      /* Double ptr math stuff */
+      //buf_info.internal = nullptr;                  /* Reserved */
+      //return py::reinterpret_steal<py::buffer>(PyMemoryView_FromBuffer(&buf_info));
     }
   }
 
@@ -180,7 +207,7 @@ namespace {
   py::object cast_to_pyobject(void** val,
                               XtcData::Name::DataType dtype,
                               uint32_t rank,
-                              uint32_t* shape) {
+                              std::vector<uint32_t> shape) {
     switch (dtype) {
     case XtcData::Name::UINT8:
       return handle_scalar_or_array<uint8_t>(val, rank, shape);
@@ -281,7 +308,7 @@ namespace {
           auto get_field_method =
             py::cpp_function([field](DetectorWrapper& self, size_t evt) -> py::object {
               auto alg_det = self._det;
-              std::tuple<void**, uint32_t, uint32_t*> ret =
+              std::tuple<void**, uint32_t, std::vector<uint32_t>> ret =
                 alg_det->get_slow_update_data(evt);
               auto [val, rank, shape] = ret;
               return cast_to_pyobject(val, field.data_type, rank, shape);
@@ -303,7 +330,7 @@ namespace {
           auto get_field_method =
             py::cpp_function([field](AlgWrapper& self, size_t evt) -> py::object {
               auto alg_det = self.det;
-              std::tuple<void**, uint32_t, uint32_t*> ret;
+              std::tuple<void**, uint32_t, std::vector<uint32_t>> ret;
               if (alg_det->is_scan()) {
                 ret = alg_det->get_scan_data(evt, self.name, field.name);
               } else {
@@ -324,6 +351,7 @@ namespace {
             auto calib_method =
               py::cpp_function([det_type](AlgWrapper& self, size_t evt) -> py::object {
                 auto alg_det = self.det;
+                XTCPP::OpFn operation = XTCPP::calibrate_segment;;
                 [[maybe_unused]] auto raw_data = alg_det->get_l1_data(evt,
                                                                       "raw",
                                                                       "raw");
@@ -423,7 +451,8 @@ PYBIND11_MODULE(_xtcpp, pyxtcpp_module, py::mod_gil_not_used()) {
            return dynamically_create_alg(pyxtcpp_module, detname, self);
          },
          py::keep_alive<0,1>(),
-         py::return_value_policy::reference);
+         py::return_value_policy::reference)
+    . def("get_last_index", &XTCPP::MPI::DataSource::get_last_index);
 
   py::class_<XTCPP::MPI::HDF5Writer>(pyxtcpp_module, "SmallData")
     .def(py::init([](size_t batch_size) {

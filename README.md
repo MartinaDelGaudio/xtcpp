@@ -167,6 +167,17 @@ An example of a set of directives that will likely perform better than a vanilla
 > mpirun --mca mpi_paffinity_alone 1 --bind-to core --map-by numa --mca osc ^ucx
 ```
 
+## Advanced Configuration
+### Environment Variables
+
+- `XTCPP_MPIDS_IDXMODE` : Change the mechanism used by `XTCPP::MPI::DataSource` for distributing offset indices used to read the "big data."
+
+  - By default the datasource will enforce strict processing of events in order - the synchronization to maintain this rule is quite slow. This environment variable can be set to `XTCPP_MPIDS_IDXMODE=FAST` to distribute indices in a deterministic fashion based on rank number. This is significantly faster.
+
+- `XTCPP_DET_GETDATA` : Change the mechanism used by `XTCPP::Base::Detector`in calls to `get_l1_data`.
+
+  - By default, detectors which are split up among multiple files will have their files read in a serial fashion. Setting `XTCPP_DET_GETDATA=THREADED` will maintain a threadpool per detector allowing reads to be launched by each thread for these files in parallel. Resource management is necessarily more complicated when using the threaded mode as the additional threads should be considered when selecting the number of MPI ranks, how they are mapped, and the resources to request from SLURM.
+
 ## Repo organization
 
 - `src/common` contains a base interface and some common implementation.

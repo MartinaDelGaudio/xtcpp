@@ -113,15 +113,26 @@ namespace XTCPP {
           continue;
         }
         XtcData::ShapesData& shapesdata = *reinterpret_cast<XtcData::ShapesData*>(payload_ptr);
+        size_t shapes_data_size{payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc)};
+
+        // Get index and check information from what was stored by SMDReader
+        auto nameindex = alg_map[detname][alg][seg_no];
+        XtcData::Names& names = nameindex.names();
+        unsigned stored_namesid = names.namesId().value();
+        if (shapesdata.namesId().value() != stored_namesid) {
+          remaining_payload -= shapes_data_size;
+          payload_ptr = payload_ptr->next();
+          m_logger->trace("Skipping namesId: {}", shapesdata.namesId().value());
+          continue;
+        }
         size_t single_shapes_offset{0};
         size_t shape_index{0};
         try {
-          XtcData::DescData descdata(shapesdata, alg_map[detname][alg][seg_no]);
-          XtcData::Names& names = descdata.nameindex().names();
+          XtcData::DescData descdata(shapesdata, nameindex);
           if (names.segment() != seg_no) {
-            size_t shapes_data_size {payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc)};
             remaining_payload -= shapes_data_size;
             payload_ptr = payload_ptr->next();
+            m_logger->trace("Skipping segment: {}", names.segment());
             continue;
           }
           for (size_t i = 0; i < names.num(); i++) {
@@ -169,7 +180,7 @@ namespace XTCPP {
           remaining_payload -= payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
           payload_ptr = payload_ptr->next();
         } catch (...) {
-          //
+          // I don't actually think this does anything... xtcdata just aborts sadly
           remaining_payload -= payload_ptr->sizeofPayload() + sizeof(XtcData::Xtc);
           payload_ptr = payload_ptr->next();
           continue;

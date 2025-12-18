@@ -12,6 +12,7 @@
 
 #include "spdlog/sinks/stdout_color_sinks.h"
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -74,8 +75,36 @@ namespace XTCPP {
        *              an unstructured pointer to the underlying set of pointers for
        *              potentially many segments.
        */
-      virtual std::tuple<void**,uint32_t,uint32_t*>
+      virtual std::tuple<void**,uint32_t,std::vector<uint32_t>>
       get_l1_data(size_t offset_idx, const std::string& alg, const std::string& data_name);
+
+      /**
+       * Return the data associated with a specific "algorithm" and field name
+       * for the specified offset index.
+       * This function searches for L1Accept data which is applicable to all
+       * detectors *except* EPICS (epicsArch) and the scan detector.
+       *
+       * Compared to `get_l1_data` this function also performs the requested operation.
+       * E.g. it can be used to calibrate the data in a single go.
+       *
+       * NOTE: The algorithm and field names to use can be retrieved using the
+       *      `algs` and `alg_fields` functions.
+       *
+       * @param[in] offset_idx The index (i.e. event) to retrieve data for.
+       * @param[in] alg The algorithm, e.g. `raw`.
+       * @param[in] data_name The field/data name within the algorithm. E.g. `raw`.
+       * @param[in] operation The function to run on the data.
+       * @return data The pointer to the requested data inside the datagram. May be
+       *              a nullptr if not found (e.g. doesn't exist). In general, you should
+       *              use the `data_ptrs` function for easier handling as this returns
+       *              an unstructured pointer to the underlying set of pointers for
+       *              potentially many segments.
+       */
+      std::tuple<void**, uint32_t, std::vector<uint32_t>>
+      get_l1_data_op(size_t offset_idx,
+                     const std::string& alg,
+                     const std::string& data_name,
+                     OpFn operation);
 
       /**
        * Return the closest SlowUpdate data to the offset index.
@@ -87,7 +116,7 @@ namespace XTCPP {
        * @param[in] offset_idx The index (i.e. event) to retrieve data for.
        * @return data The pointer to the requested SlowUpdate data.
        */
-      virtual std::tuple<void**, uint32_t, uint32_t*>
+      virtual std::tuple<void**, uint32_t, std::vector<uint32_t>>
       get_slow_update_data(size_t offset_idx);
 
       /**
@@ -107,7 +136,7 @@ namespace XTCPP {
        * @param[in] data_name The field/data name within the algorithm.
        * @return data The pointer to the requested scan data.
        */
-      virtual std::tuple<void**, uint32_t, uint32_t*>
+      virtual std::tuple<void**, uint32_t, std::vector<uint32_t>>
       get_scan_data(size_t offset_idx, const std::string& alg, const std::string& data_name);
 
       /**
@@ -295,16 +324,29 @@ namespace XTCPP {
     private:
       std::optional<ThreadPool> m_thread_pool;
       using GetDataFn =
-        std::tuple<void**, uint32_t, uint32_t*> (Detector::*)(size_t,
-                                                             const std::string&,
-                                                             const std::string&);
+        std::tuple<void**, uint32_t, std::vector<uint32_t>> (Detector::*)(size_t,
+                                                                          const std::string&,
+                                                                          const std::string&);
+
+      using GetDataOpFn =
+        std::tuple<void**, uint32_t, std::vector<uint32_t>> (Detector::*)(size_t,
+                                                                          const std::string&,
+                                                                          const std::string&,
+                                                                          OpFn);
 
       GetDataFn get_l1_data_impl;
-      std::tuple<void**, uint32_t, uint32_t*>
+      GetDataOpFn get_l1_data_op_impl;
+      std::tuple<void**, uint32_t, std::vector<uint32_t>>
       get_l1_data_threaded(size_t, const std::string&, const std::string&);
 
-      std::tuple<void**, uint32_t, uint32_t*>
+      std::tuple<void**, uint32_t, std::vector<uint32_t>>
+      get_l1_data_threaded_op(size_t, const std::string&, const std::string&, OpFn);
+
+      std::tuple<void**, uint32_t, std::vector<uint32_t>>
       get_l1_data_sequential(size_t, const std::string&, const std::string&);
+
+      std::tuple<void **, uint32_t, std::vector<uint32_t>>
+      get_l1_data_sequential_op(size_t, const std::string&, const std::string&, OpFn);
     };
   } // namespace Base
 }

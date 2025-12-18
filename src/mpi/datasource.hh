@@ -36,9 +36,16 @@ namespace XTCPP {
 
       MPI_Win m_idx_window;
       MPI_Aint* m_curr_idx{nullptr};
+      size_t m_local_idx;
 
       size_t fetch_next_idx() override;
+      size_t fetch_next_idx_ordered();
+      size_t fetch_next_idx_round_robin();
       void init_detectors() override;
+
+      using FetchNextIdxFn = size_t (DataSource::*)();
+
+      FetchNextIdxFn fetch_next_idx_impl;
     };
   } // namespace MPI
 } // namespace XTCPP

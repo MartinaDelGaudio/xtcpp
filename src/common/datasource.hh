@@ -41,6 +41,22 @@ namespace XTCPP {
       virtual std::shared_ptr<Detector> detector(std::string detname) = 0;
 
       /**
+       * Load the next set of offsets from the .smd.xtc2 files. This function
+       * will continue to load offsets for all BDReader/SMDReader pairs which are
+       * currently in use. If some no longer have offsets, those will return 0;
+       * however, the return value from this function is the greatest number of offsets
+       * read by any BDReader/SMDReader pair.
+       *
+       * @return num_offsets The number of offsets read. If 0, no offsets found.
+       */
+      size_t load_next_offsets();
+
+      /**
+       * Get the current last offset index.
+       */
+      size_t get_last_index() { return m_last_offset_index; }
+
+      /**
        * DataSource iterator to get offset indices.
        */
       class Iterator {
@@ -111,7 +127,6 @@ namespace XTCPP {
        */
       size_t m_events_per_read;
       size_t m_last_offset_index{0}; ///< Current last offset index
-      size_t load_next_offsets(); ///< Fetch a new set of offsets from the .smd.xtc2 files
 
       /**
        * Determine the next offset index to use.
