@@ -141,7 +141,7 @@ namespace {
       }
       auto format_str =
         const_cast<char*>(py::format_descriptor<T>::format().c_str());
-      std::cout << format_str << std::endl;
+
       Py_buffer buf_info;
       buf_info.buf = reinterpret_cast<void *>(val); /* Data buffer */
       buf_info.len = total_bytes;                   /* Total number of bytes */
