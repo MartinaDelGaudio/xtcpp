@@ -301,6 +301,31 @@ namespace {
       return op_impl(other, mul);
     }
 
+    /**
+     * A function to support an __truediv__ implementation in the Python bindings.
+     *
+     * NOTE: This is not strictly speaking NumPy like. It will not convert the values
+     *       to a float64 for the division.
+     * TODO: Support the use of a NumPy array as `other`.
+     */
+    py::array_t<T> truediv(const ArrayView<T>& other) const {
+      using DivFn = std::function<void(uint8_t*, uint8_t*, T*)>;
+
+      DivFn div = [&](uint8_t* lhs, uint8_t* rhs, T* out) {
+        T lhs_val = *reinterpret_cast<T*>(lhs);
+        T rhs_val = *reinterpret_cast<T*>(rhs);
+
+        if (rhs_val == T(0)) {
+          // Watch for divide by 0 - return inf if lhs is inf
+          *out = std::isfinite(lhs_val) ? std::nan("") : lhs_val;
+        } else {
+          *out = lhs_val / rhs_val;
+        }
+      };
+
+      return op_impl(other, div);
+    }
+
   private:
     void along_each_inner_axis_do(uint8_t* lhs_base,
                                   uint8_t* rhs_base,
@@ -318,7 +343,7 @@ namespace {
       for (size_t i=0; i < dim; ++i) {
         along_each_inner_axis_do(lhs_base + i * stride,
                                  rhs_base + i * stride,
-                                 out_base + i,
+                                 out_base + i * (stride / sizeof(T)),
                                  axis + 1,
                                  operation);
       }
@@ -733,17 +758,18 @@ void bind_arrayview(py::module_& m, const std::string& type_name) {
   using ArrayViewType = ArrayView<T>;
 
   py::class_<ArrayViewType>(m, type_name.c_str())
-      .def_property_readonly(
-          "shape", [](const ArrayViewType& self) { return self.shape; })
-      .def_property_readonly(
-          "ndim", [](const ArrayViewType& self) { return self.shape.size(); })
-      .def_property_readonly(
-          "dtype", [](const ArrayViewType& self) { return self.dtype; })
-      .def("__getitem__", &ArrayViewType::operator[])
-      .def("__repr__", &ArrayViewType::repr)
-      .def("__str__", &ArrayViewType::repr)
-      .def("__add__", &ArrayViewType::add, py::is_operator())
-      .def("__mul__", &ArrayViewType::mul, py::is_operator());
+    .def_property_readonly(
+        "shape", [](const ArrayViewType& self) { return self.shape; })
+    .def_property_readonly(
+        "ndim", [](const ArrayViewType& self) { return self.shape.size(); })
+    .def_property_readonly(
+        "dtype", [](const ArrayViewType& self) { return self.dtype; })
+    .def("__getitem__", &ArrayViewType::operator[])
+    .def("__repr__", &ArrayViewType::repr)
+    .def("__str__", &ArrayViewType::repr)
+    .def("__add__", &ArrayViewType::add, py::is_operator())
+    .def("__mul__", &ArrayViewType::mul, py::is_operator())
+    .def("__truediv__", &ArrayViewType::truediv, py::is_operator());
 }
 
 /**
