@@ -19,10 +19,13 @@
 
 #include <any>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdfloat>
 #include <string>
+#include <sys/types.h>
 #include <unordered_set>
 #include <variant>
 #include <vector>
@@ -39,22 +42,31 @@ PYBIND11_MAKE_OPAQUE(XTCPP::Base::BDReader)
 
 namespace {
   /**
-   * Properly convert the scalar or array to a Python object.
-   * Scalar and arrays constructed from a single segment are hopefully
-   * self-explanatory.
+   * A non-PEP3118 conforming array view that supports double pointers.
    *
-   * NOTE: The intended approach for multi-segment arrays is described here,
-   *       however, it has been abandoned for now. NumPy does not support
-   *       the use of suboffsets - so for now we collapse into an array (which
-   *       sadly requires a copy.) The description for the suboffsets method
-   *       is retained, and some of the required code is left commented in case
-   *       it can be used in the future.
+   * Since we know how the data will be arranged, this is not attempting to be
+   * a conforming implementation of PEP3118 suboffsets. Instead, the first axis
+   * is known to be a double pointer, and the offset calculations are adjusted
+   * to make use of this known (and non-changing) fact.
    *
-   * The case of multi-segment arrays is more complicated
-   * since the data for each segment could potentially be anywhere in memory.
-   * This is not quite supported directly by pybind11; however, the Python
-   * buffer protocol does support it, thankfully, using a concept called
-   * `suboffsets`. Refer to the Python API documentation for more information
+   * This class implements a limited subset of the NumPy functionality in order
+   * to allow inspection of raw data that gets returned in a fashion that is
+   * incompatible with NumPy's implementation (i.e. it would require suboffsets).
+   * Slicing the array in a fashion that would result in a selection of data that
+   * is compatible with NumPy will opt to return the NumPy array instead.
+   * Additionally, any operations that would require a copy will also lead to the
+   * return of a NumPy array.
+   *
+   * NOTE: The returned view is valid only while the underlying C++ buffer is.
+   *       Python does NOT take any ownership via the wrapped version of this
+   *       class.
+   *
+   * A future implementation could make use of PEP3118 suboffsets for greater
+   * compatability. A description of that method is described here.
+   *
+   * The Python buffer protocol supports views of data where the various portions
+   * of the buffer are located anywhere in memory. To do so requires a concept
+   * called `suboffsets`. Refer to the Python API documentation for more information
    * but the basic usage of suboffsets is demonstrated by the following code snippet
    * used to access data from a buffer employing them.
    * Taken from the PEP3118 docs: https://peps.python.org/pep-3118/
@@ -73,10 +85,370 @@ namespace {
    *     return (void*)pointer;
    * }
    * @endcode
+   */
+  template <class T>
+  class ArrayView {
+  public:
+    ArrayView(void** data_,
+              std::vector<size_t>& shape_,
+              std::vector<size_t>& strides_,
+              py::dtype dtype_)
+      : data(data_)
+      , shape(shape_)
+      , strides(strides_)
+      , dtype(dtype_)
+    {}
+
+    /**
+     * Retrieve the data at the multi-dimensional index.
+     * Negative indices are supported in the normal Python fashion.
+     */
+    T at(const std::vector<ssize_t>& indices) {
+      if (indices.size() > shape.size()) {
+        py::index_error();
+      }
+      void** working_dbl_ptr = data;
+      uint8_t* working_ptr {nullptr};
+      for (size_t i=0; i < indices.size(); ++i) {
+        ssize_t idx = indices[i];
+        if (idx < 0) {
+          // Support negative indices - wrap around
+          idx += shape[i];
+        }
+        if (idx < 0 || static_cast<size_t>(idx) >= shape[i]) {
+          throw py::index_error();
+        }
+        if (i == 0) {
+          working_ptr =
+            reinterpret_cast<uint8_t*>(reinterpret_cast<T**>(working_dbl_ptr)[idx]);
+        } else {
+          working_ptr += idx * strides[i];
+        }
+      }
+      return *reinterpret_cast<T*>(working_ptr);
+    }
+
+    std::variant<ArrayView<T>, py::array_t<T>>
+    operator[](py::object slices_or_indices) const {
+      void** new_data = data;
+      std::vector<size_t> new_shape = shape;
+      std::vector<size_t> new_strides = strides;
+
+      // Check to see if we still need the double pointers for the first axis
+      // if not, we'll just return a NumPy array
+      bool new_first_axis_ptrs {true};
+      size_t axis{0};
+      if (py::isinstance<py::int_>(slices_or_indices)) {
+        // Just an integer passed as index
+        ssize_t idx = slices_or_indices.cast<ssize_t>();
+        if (idx < 0) {
+          idx += new_shape[0];
+        }
+        if (idx < 0 || static_cast<size_t>(idx) >= new_shape[0]) {
+          throw py::index_error();
+        }
+
+        // Convert to NumPy array now
+        void* arr_data = new_data[idx];
+        new_shape.erase(new_shape.begin());
+        new_strides.erase(new_strides.begin());
+        return py::array_t<T>(py::buffer_info(arr_data,
+                                              sizeof(T),
+                                              py::format_descriptor<T>::format(),
+                                              new_shape.size(),
+                                              new_shape,
+                                              new_strides));
+      }
+      // If not integer must be a tuple otherwise throw error
+      if (!py::isinstance<py::tuple>(slices_or_indices)) {
+        throw py::index_error();
+      }
+
+      // Handle each dimension specified by the tuple
+      for (auto arg : slices_or_indices) {
+        if (py::isinstance<py::slice>(arg)) {
+          // Dealing with slices
+          py::slice slice = arg.cast<py::slice>();
+
+          ssize_t start, stop, step, length;
+          if (!slice.compute(shape[axis], &start, &stop, &step, &length)) {
+            throw py::error_already_set();
+          }
+          if (axis == 0) {
+            // Pointer axis (segments)
+            new_data += start;
+            new_shape[axis] = length;
+          } else {
+            uint8_t* tmp = reinterpret_cast<uint8_t*>(reinterpret_cast<T**>(new_data));
+            tmp += start * strides[axis];
+            new_data = reinterpret_cast<void**>(tmp);
+            new_shape[axis] = length;
+            new_strides[axis] *= step;
+          }
+          axis++;
+        } else if (py::isinstance<py::int_>(arg)) {
+          // Dealing with single integer indices for the axis
+          ssize_t idx = arg.cast<ssize_t>();
+          if (idx < 0) {
+            // Support negative indices - wrap around
+            idx += new_shape[axis];
+          }
+          if (idx < 0 || static_cast<size_t>(idx) >= new_shape[axis]) {
+            throw py::index_error();
+          }
+          uint8_t* tmp =
+              reinterpret_cast<uint8_t*>(reinterpret_cast<T**>(new_data));
+          if (axis == 0) {
+            new_data = &new_data[idx];
+            new_first_axis_ptrs = false;
+          } else {
+            tmp += idx * new_strides[axis];
+            new_data = reinterpret_cast<void**>(tmp);
+          }
+          new_shape.erase(new_shape.begin() + axis);
+          new_strides.erase(new_strides.begin() + axis);
+        } else if (py::isinstance<py::ellipsis>(arg)) {
+          axis = new_shape.size();
+        } else {
+          throw py::index_error("Unrecognized indexing type.");
+        }
+      }
+
+      if (!new_first_axis_ptrs) {
+        return py::array_t<T>(py::buffer_info(new_data[0],
+                                              sizeof(T),
+                                              py::format_descriptor<T>::format(),
+                                              new_shape.size(),
+                                              new_shape,
+                                              new_strides));
+      } else {
+        return ArrayView<T>(new_data,
+                            new_shape,
+                            new_strides,
+                            dtype);
+      }
+    }
+
+    /**
+     * Return a NumPy style string for a __repr__ binding.
+     *
+     * @return repr_str A string representaiton of the ArrayView data. It will
+     *         truncate axes which get too long and replace them with "...", as
+     *         NumPy's formatting does.
+     */
+    std::string repr() {
+      std::string class_name {"ArrayView("};
+      std::string opening {class_name + "("};
+      std::ostringstream oss;
+
+      oss << opening;
+
+      size_t base_indent {opening.size() + shape.size() - 1};
+      if (shape.empty()) {
+        oss << "[], dtype=" << py::str(dtype).cast<std::string>() << ")";
+        return oss.str();
+      }
+
+      oss << "[";
+      // Define number of items along axis before replacing with output with `...`
+      constexpr size_t max_items {3};
+      size_t nsegs = shape[0];
+
+      for (size_t seg=0; seg < nsegs; ++seg) {
+        uint8_t* base = reinterpret_cast<uint8_t*>(reinterpret_cast<T**>(data)[seg]);
+
+        repr_internal(oss, base, 1, base_indent, max_items);
+        if (seg < nsegs - 1) {
+          if (nsegs > 2 * max_items && seg == 2) {
+            seg = nsegs - (max_items + 1); // Will be incremented on next iteration
+          }
+          oss << ",\n\n" << std::string(base_indent-1, ' ');
+        }
+      }
+
+      oss << "], dtype=" << py::str(dtype).cast<std::string>() << ")";
+
+      return oss.str();
+    }
+
+    /**
+     * A function to support an __add__ implementation in the Python bindings.
+     *
+     * TODO: Support the use of a NumPy array as `other`.
+     */
+    py::array_t<T> add(const ArrayView<T>& other) const {
+      using SumFn = std::function<void(uint8_t*, uint8_t*, T*)>;
+
+      SumFn add = [&](uint8_t* lhs, uint8_t* rhs, T* out) {
+        *out = *reinterpret_cast<T*>(lhs) + *reinterpret_cast<T*>(rhs);
+      };
+
+      return op_impl(other, add);
+    }
+
+    /**
+     * A function to support an __mul__ implementation in the Python bindings.
+     *
+     * TODO: Support the use of a NumPy array as `other`.
+     */
+    py::array_t<T> mul(const ArrayView<T>& other) const {
+      using MulFn = std::function<void(uint8_t*, uint8_t*, T*)>;
+
+      MulFn mul = [&](uint8_t* lhs, uint8_t* rhs, T* out) {
+        *out = *reinterpret_cast<T*>(lhs) * *reinterpret_cast<T*>(rhs);
+      };
+
+      return op_impl(other, mul);
+    }
+
+  private:
+    void along_each_inner_axis_do(uint8_t* lhs_base,
+                                  uint8_t* rhs_base,
+                                  T* out_base,
+                                  size_t axis,
+                                  std::function<void(uint8_t*,uint8_t*,T*)> operation) const {
+      if (axis == shape.size()) {
+        operation(lhs_base, rhs_base, out_base);
+        return;
+      }
+
+      size_t dim = shape[axis];
+      size_t stride = strides[axis];
+
+      for (size_t i=0; i < dim; ++i) {
+        along_each_inner_axis_do(lhs_base + i * stride,
+                                 rhs_base + i * stride,
+                                 out_base + i,
+                                 axis + 1,
+                                 operation);
+      }
+    }
+
+    py::array_t<T> op_impl(const ArrayView<T>& other,
+                           std::function<void(uint8_t*,uint8_t*,T*)> operation) const {
+      if (shape != other.shape) {
+        throw py::value_error("ArrayView shapes must match!");
+      }
+
+      // Will create new contiguous output array - jumps to NumPy so we're done
+      // with ArrayViews after this function executes
+      py::array_t<T> result(shape);
+
+      // Get the buffer info (can grab pointer from this)
+      py::buffer_info result_buffer = result.request();
+
+      const size_t nsegs = shape[0];
+      const size_t pix_per_seg = std::accumulate(shape.begin() + 1,
+                                                 shape.end(),
+                                                 1,
+                                                 std::multiplies{});
+
+      // Segment data is contiguous - loop over segments, and pass in a contiguous
+      // block to operate on. Then fill the contiguous array allocated above
+      for (size_t seg=0; seg < nsegs; ++seg) {
+        uint8_t* lhs_base =
+          reinterpret_cast<uint8_t*>(reinterpret_cast<T**>(data)[seg]);
+        uint8_t* rhs_base =
+          reinterpret_cast<uint8_t*>(reinterpret_cast<T**>(other.data)[seg]);
+
+        // Get raw pointer and calculate the offset
+        // Block is all contiguous now, so should be simple math
+        T* out_base = reinterpret_cast<T*>(result_buffer.ptr);
+        out_base += seg * pix_per_seg;
+
+        along_each_inner_axis_do(lhs_base,
+                                 rhs_base,
+                                 out_base,
+                                 1,
+                                 operation);
+      }
+
+      return result;
+    }
+
+    void repr_internal(std::ostringstream& oss,
+                       uint8_t* base,
+                       size_t axis,
+                       size_t indent,
+                       size_t max_items) const {
+      if (axis == shape.size()) {
+        oss << *reinterpret_cast<T*>(base);
+        return;
+      }
+
+      oss << "[";
+
+      size_t dim = shape[axis];
+      size_t stride = strides[axis];
+
+      auto format_item = [&](size_t i) -> void {
+        if (i > 0 && axis == shape.size() - 1) {
+          oss << ", ";
+        }
+
+        repr_internal(oss,
+                      base + i * stride,
+                      axis + 1,
+                      indent,
+                      max_items);
+
+        if (axis + 1 < shape.size()) {
+          oss << "\n" << std::string(indent, ' ');
+        }
+
+      };
+
+      if (dim <= 2 * max_items) {
+        for (size_t i=0; i < dim; ++i) {
+          format_item(i);
+        }
+      } else {
+        for (size_t i=0; i < max_items; ++i) {
+          format_item(i);
+        }
+
+        if (axis + 1 < shape.size()) {
+          oss << "...\n" << std::string(indent, ' ');
+        } else {
+          oss << ", ...";
+        }
+
+        for (size_t i = dim - max_items; i < dim; ++i) {
+          if (axis == shape.size() - 1) {
+            oss << ", ";
+          }
+          repr_internal(oss,
+                        base + i * stride,
+                        axis + 1,
+                        indent + 1,
+                        max_items);
+          if (axis + 1 < shape.size() && i < dim - 1) {
+            oss << "\n" << std::string(indent, ' ');
+          }
+        }
+        oss << "]";
+      }
+    }
+
+
+  public:
+    void** data;
+    std::vector<size_t> shape;
+    std::vector<size_t> strides;
+    py::dtype dtype;
+  };
+
+  /**
+   * Properly convert the scalar or array to a Python object.
+   * Scalar and arrays constructed from a single segment are hopefully
+   * self-explanatory.
    *
-   * NOTE: Unfortunately it seems that NumPy does NOT support suboffsets in
-   *       buffers. At least the versions we use frequently.
-   * TODO: Investigate an alternative then.
+   * NOTE: The intended approach for multi-segment arrays is described here,
+   *       however, it has been abandoned for now. NumPy does not support
+   *       the use of suboffsets - so for now we use an ArrayView
+   *       The description for the suboffsets method is retained.
+   *       is retained, and some of the required code is left commented in case
+   *       it can be used in the future.
    *
    * @param[in] val Raw data pointer. A double pointer since multiple segments
    *            may be located at different places in memory.
@@ -130,57 +502,11 @@ namespace {
                                                 arrshape,
                                                 strides));
         } else {
-          // TODO: Make this multi-segment code not need a copy??
-          py::list segment_arrays;
-          // Boo... this will cause a copy at the end when the segments are put
-          // into a single array :(
-          for (size_t seg=0; seg < nsegs; ++seg) {
-            segment_arrays.append(py::array_t<T>(py::buffer_info(reinterpret_cast<T**>(val)[seg],
-                                                                 sizeof(T),
-                                                                 py::format_descriptor<T>::format(),
-                                                                 rank - 1,
-                                                                 arrshape,
-                                                                 strides)));
-
-          }
-          return py::array_t<T>(segment_arrays);
+          strides.insert(strides.begin(), 1);
+          arrshape.insert(arrshape.begin(),shape[0]);
+          return py::cast(ArrayView<T>(val, arrshape, strides, py::dtype::of<T>()));
         }
       }
-      /* Complex case - "PIL" style -- see the actual Python docs for this one */
-      /* Sadly NumPy does not support this :( */
-      /*
-      std::vector<Py_ssize_t> strides(rank);
-      std::vector<Py_ssize_t> arrshape(shape, shape + rank);
-      // Used for pointer math on first dimension
-      // A value of 0 means use as double pointer but add nothing, a negative
-      // value means that its a single pointer. We treat the first axis as double
-      // pointers and initialize the rest to -1
-      std::vector<Py_ssize_t> suboffsets(rank, -1);
-      suboffsets[0] = 0;
-      // First dimension is the difference between void** pointers
-      strides[0] = sizeof(void **);
-      // Last dimension is contiguous and should be size of element for stride
-      strides[rank - 1] = sizeof(T);
-      // Intermediate dimensions are multiplied by the size of the following
-      // dimension.
-      for (size_t i = rank - 2; i > 0; --i) {
-        strides[i] = strides[i + 1] * shape[i + 1];
-      }
-      auto format_str =
-        const_cast<char*>(py::format_descriptor<T>::format().c_str());
-      */
-      //Py_buffer buf_info;
-      //buf_info.buf = reinterpret_cast<void *>(val); /* Data buffer */
-      //buf_info.len = total_bytes;                   /* Total number of bytes */
-      //buf_info.itemsize = sizeof(T);                /* Size of 1 element */
-      //buf_info.readonly = 1;                        /* Read-only buffer */
-      //buf_info.format = format_str;                 /* Format string for type */
-      //buf_info.ndim = rank;                         /* Number of dims */
-      //buf_info.shape = arrshape.data();             /* Shape of array */
-      //buf_info.strides = strides.data();            /* Strides along axes */
-      //buf_info.suboffsets = suboffsets.data();      /* Double ptr math stuff */
-      //buf_info.internal = nullptr;                  /* Reserved */
-      //return py::reinterpret_steal<py::buffer>(PyMemoryView_FromBuffer(&buf_info));
     }
   }
 
@@ -402,6 +728,24 @@ namespace {
   }
 } // anonymous namespace
 
+template <typename T>
+void bind_arrayview(py::module_& m, const std::string& type_name) {
+  using ArrayViewType = ArrayView<T>;
+
+  py::class_<ArrayViewType>(m, type_name.c_str())
+      .def_property_readonly(
+          "shape", [](const ArrayViewType& self) { return self.shape; })
+      .def_property_readonly(
+          "ndim", [](const ArrayViewType& self) { return self.shape.size(); })
+      .def_property_readonly(
+          "dtype", [](const ArrayViewType& self) { return self.dtype; })
+      .def("__getitem__", &ArrayViewType::operator[])
+      .def("__repr__", &ArrayViewType::repr)
+      .def("__str__", &ArrayViewType::repr)
+      .def("__add__", &ArrayViewType::add, py::is_operator())
+      .def("__mul__", &ArrayViewType::mul, py::is_operator());
+}
+
 /**
  * Note: Must be careful in the class definitions for selecting the "holder"
  * type. This is by default a unique_ptr (for pybind11 backward compatibility).
@@ -419,6 +763,19 @@ PYBIND11_MODULE(_xtcpp, pyxtcpp_module, py::mod_gil_not_used()) {
   pyxtcpp_module.doc() = "XTCPP Python bindings.";
 
   //pyxtcpp_dets_module = pyxtcpp_module.def_submodule("detectors", py::mod_gil_not_used())
+
+  bind_arrayview<uint8_t>(pyxtcpp_module, "ArrayView_u8");
+  bind_arrayview<uint16_t>(pyxtcpp_module, "ArrayView_u16");
+  bind_arrayview<uint32_t>(pyxtcpp_module, "ArrayView_u32");
+  bind_arrayview<uint64_t>(pyxtcpp_module, "ArrayView_u64");
+
+  bind_arrayview<int8_t>(pyxtcpp_module, "ArrayView_i8");
+  bind_arrayview<int16_t>(pyxtcpp_module, "ArrayView_i16");
+  bind_arrayview<int32_t>(pyxtcpp_module, "ArrayView_i32");
+  bind_arrayview<int64_t>(pyxtcpp_module, "ArrayView_i64");
+
+  bind_arrayview<float>(pyxtcpp_module, "ArrayView_float");
+  bind_arrayview<double>(pyxtcpp_module, "ArrayView_double");
 
   py::class_<XTCPP::BDXtcOffset>(pyxtcpp_module, "BDXtcOffset")
     .def_readwrite("offset", &XTCPP::BDXtcOffset::offset)
@@ -442,18 +799,19 @@ PYBIND11_MODULE(_xtcpp, pyxtcpp_module, py::mod_gil_not_used()) {
          py::keep_alive<0, 1>())
     .def("detector",
          [&pyxtcpp_module](XTCPP::MPI::DataSource& self, std::string detname) {
-           // This function will dynamically construct sub-class definitions
-           // for Algorithms and Detectors, as children of AlgWrapper
-           // and DetectorWrapper. These are only constructed once, so repeat
-           // calls to the ds.detector("detname") will reuse them.
+           // This function will dynamically construct instances for the
+           // Algorithms and Detectors, as AlgWrapper and DetectorWrapper objects.
            // The methods to retrieve raw data from the XTC2 files are added to
            // the algorithms, which are in turn added to the detector objects
+           // In the future this should be done as a creation of sub-classes, which
+           // will avoid the use of py::dynamic_attr (see the todo above)
            return dynamically_create_alg(pyxtcpp_module, detname, self);
          },
          py::keep_alive<0,1>(),
          py::return_value_policy::reference)
     . def("get_last_index", &XTCPP::MPI::DataSource::get_last_index);
 
+  // TODO: Actually implement HDF5Writer
   py::class_<XTCPP::MPI::HDF5Writer>(pyxtcpp_module, "SmallData")
     .def(py::init([](size_t batch_size) {
       return new XTCPP::MPI::HDF5Writer(MPI_COMM_WORLD, batch_size);
