@@ -44,8 +44,7 @@ namespace {
   /**
    * A non-PEP3118 conforming array view that supports double pointers.
    *
-   * Since we know how the data will be arranged, this is not attempting to be
-   * a conforming implementation of PEP3118 suboffsets. Instead, the first axis
+   * Since we know how the data will be arranged, the first axis
    * is known to be a double pointer, and the offset calculations are adjusted
    * to make use of this known (and non-changing) fact.
    *
@@ -61,8 +60,8 @@ namespace {
    *       Python does NOT take any ownership via the wrapped version of this
    *       class.
    *
-   * A future implementation could make use of PEP3118 suboffsets for greater
-   * compatability. A description of that method is described here.
+   * This implementation may possibly be changed in the future to be a standard
+   * suboffsets implementation. A description of that method is described here.
    *
    * The Python buffer protocol supports views of data where the various portions
    * of the buffer are located anywhere in memory. To do so requires a concept
@@ -96,8 +95,20 @@ namespace {
       : data(data_)
       , shape(shape_)
       , strides(strides_)
+      , offsets(strides.size())
       , dtype(dtype_)
     {}
+
+    ArrayView(void** data_,
+              std::vector<size_t>& shape_,
+              std::vector<size_t>& strides_,
+              std::vector<size_t>& offsets_,
+              py::dtype dtype_)
+        : data(data_)
+        , shape(shape_)
+        , strides(strides_)
+        , offsets(offsets_)
+        , dtype(dtype_) {}
 
     /**
      * Retrieve the data at the multi-dimensional index.
@@ -122,17 +133,25 @@ namespace {
           working_ptr =
             reinterpret_cast<uint8_t*>(reinterpret_cast<T**>(working_dbl_ptr)[idx]);
         } else {
-          working_ptr += idx * strides[i];
+          working_ptr += idx * strides[i] + offsets[i];
         }
       }
       return *reinterpret_cast<T*>(working_ptr);
     }
 
+    /**
+     * Support indexing using slices, integers, or tuples thereof.
+     *
+     * If the new set of indices returns a NumPy-compatible view, return the
+     * NumPy array instead of an ArrayView.
+     * TODO: Clean up to remove the duplication of code for various cases.
+     */
     std::variant<ArrayView<T>, py::array_t<T>>
     operator[](py::object slices_or_indices) const {
       void** new_data = data;
       std::vector<size_t> new_shape = shape;
       std::vector<size_t> new_strides = strides;
+      std::vector<size_t> new_offsets = offsets;
 
       // Check to see if we still need the double pointers for the first axis
       // if not, we'll just return a NumPy array
@@ -158,62 +177,94 @@ namespace {
                                               new_shape.size(),
                                               new_shape,
                                               new_strides));
-      }
-      // If not integer must be a tuple otherwise throw error
-      if (!py::isinstance<py::tuple>(slices_or_indices)) {
-        throw py::index_error();
-      }
+      } else if (py::isinstance<py::slice>(slices_or_indices)) {
+        py::slice slice = slices_or_indices.cast<py::slice>();
+        ssize_t start, stop, step, length;
+        if (!slice.compute(shape[axis], &start, &stop, &step, &length)) {
+          throw py::error_already_set();
+        }
+        if (start < 0) {
+          start += new_shape[axis];
+        }
+        if (stop < 0) {
+          stop += new_shape[axis];
+        }
+        if (start < 0 ||
+            stop  < 0 ||
+            static_cast<size_t>(start) >= new_shape[axis] ||
+            static_cast<size_t>(stop)  >= new_shape[axis]) {
+          throw py::index_error();
+        }
+        new_data = &new_data[start];
+        new_shape[axis] = length;
+        if (length == 1) {
+          new_first_axis_ptrs = false;
+        }
+      } else {
+        // If not integer must be a tuple otherwise throw error
+        if (!py::isinstance<py::tuple>(slices_or_indices)) {
+          throw py::index_error();
+        }
 
-      // Handle each dimension specified by the tuple
-      for (auto arg : slices_or_indices) {
-        if (py::isinstance<py::slice>(arg)) {
-          // Dealing with slices
-          py::slice slice = arg.cast<py::slice>();
+        // Handle each dimension specified by the tuple
+        for (auto arg : slices_or_indices) {
+          if (py::isinstance<py::slice>(arg)) {
+            // Dealing with slices
+            py::slice slice = arg.cast<py::slice>();
 
-          ssize_t start, stop, step, length;
-          if (!slice.compute(shape[axis], &start, &stop, &step, &length)) {
-            throw py::error_already_set();
-          }
-          if (axis == 0) {
-            // Pointer axis (segments)
-            new_data += start;
-            new_shape[axis] = length;
+            ssize_t start, stop, step, length;
+            if (!slice.compute(shape[axis], &start, &stop, &step, &length)) {
+              throw py::error_already_set();
+            }
+            if (start < 0) {
+              start += new_shape[axis];
+            }
+            if (stop < 0) {
+              stop += new_shape[axis];
+            }
+            if (start < 0 ||
+                stop  < 0 ||
+                static_cast<size_t>(start) >= new_shape[axis] ||
+                static_cast<size_t>(stop)  >= new_shape[axis]) {
+              throw py::index_error();
+            }
+            if (axis == 0) {
+              // Pointer axis (segments)
+              new_data = &new_data[start];
+              new_shape[axis] = length;
+            } else {
+              new_shape[axis] = length;
+              new_strides[axis] *= step;
+              new_offsets[axis] = start * strides[axis];
+            }
+            axis++;
+          } else if (py::isinstance<py::int_>(arg)) {
+            // Dealing with single integer indices for the axis
+            ssize_t idx = arg.cast<ssize_t>();
+            if (idx < 0) {
+              // Support negative indices - wrap around
+              idx += new_shape[axis];
+            }
+            if (idx < 0 || static_cast<size_t>(idx) >= new_shape[axis]) {
+              throw py::index_error();
+            }
+
+            if (axis == 0) {
+              new_data = &new_data[idx];
+              new_first_axis_ptrs = false;
+            } else {
+              new_offsets[axis] = idx * strides[axis];
+            }
+            new_shape.erase(new_shape.begin() + axis);
+            new_strides.erase(new_strides.begin() + axis);
+            new_offsets.erase(new_offsets.begin() + axis);
+          } else if (py::isinstance<py::ellipsis>(arg)) {
+            axis = new_shape.size();
           } else {
-            uint8_t* tmp = reinterpret_cast<uint8_t*>(reinterpret_cast<T**>(new_data));
-            tmp += start * strides[axis];
-            new_data = reinterpret_cast<void**>(tmp);
-            new_shape[axis] = length;
-            new_strides[axis] *= step;
+            throw py::index_error("Unrecognized indexing type.");
           }
-          axis++;
-        } else if (py::isinstance<py::int_>(arg)) {
-          // Dealing with single integer indices for the axis
-          ssize_t idx = arg.cast<ssize_t>();
-          if (idx < 0) {
-            // Support negative indices - wrap around
-            idx += new_shape[axis];
-          }
-          if (idx < 0 || static_cast<size_t>(idx) >= new_shape[axis]) {
-            throw py::index_error();
-          }
-          uint8_t* tmp =
-              reinterpret_cast<uint8_t*>(reinterpret_cast<T**>(new_data));
-          if (axis == 0) {
-            new_data = &new_data[idx];
-            new_first_axis_ptrs = false;
-          } else {
-            tmp += idx * new_strides[axis];
-            new_data = reinterpret_cast<void**>(tmp);
-          }
-          new_shape.erase(new_shape.begin() + axis);
-          new_strides.erase(new_strides.begin() + axis);
-        } else if (py::isinstance<py::ellipsis>(arg)) {
-          axis = new_shape.size();
-        } else {
-          throw py::index_error("Unrecognized indexing type.");
         }
       }
-
       if (!new_first_axis_ptrs) {
         return py::array_t<T>(py::buffer_info(new_data[0],
                                               sizeof(T),
@@ -225,6 +276,7 @@ namespace {
         return ArrayView<T>(new_data,
                             new_shape,
                             new_strides,
+                            new_offsets,
                             dtype);
       }
     }
@@ -339,11 +391,12 @@ namespace {
 
       size_t dim = shape[axis];
       size_t stride = strides[axis];
+      size_t offset = offsets[axis];
 
       for (size_t i=0; i < dim; ++i) {
-        along_each_inner_axis_do(lhs_base + i * stride,
-                                 rhs_base + i * stride,
-                                 out_base + i * (stride / sizeof(T)),
+        along_each_inner_axis_do(lhs_base + i * stride + offset,
+                                 rhs_base + i * stride + offset,
+                                 out_base + i * (stride / sizeof(T)) + (offset / sizeof(T)),
                                  axis + 1,
                                  operation);
       }
@@ -405,6 +458,7 @@ namespace {
 
       size_t dim = shape[axis];
       size_t stride = strides[axis];
+      size_t offset = offsets[axis];
 
       auto format_item = [&](size_t i) -> void {
         if (i > 0 && axis == shape.size() - 1) {
@@ -412,7 +466,7 @@ namespace {
         }
 
         repr_internal(oss,
-                      base + i * stride,
+                      base + i * stride + offset,
                       axis + 1,
                       indent,
                       max_items);
@@ -460,6 +514,7 @@ namespace {
     void** data;
     std::vector<size_t> shape;
     std::vector<size_t> strides;
+    std::vector<size_t> offsets;
     py::dtype dtype;
   };
 
