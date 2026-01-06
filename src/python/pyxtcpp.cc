@@ -29,6 +29,8 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
+#include <numeric>
+
 
 namespace py = pybind11;
 
@@ -813,19 +815,23 @@ void bind_arrayview(py::module_& m, const std::string& type_name) {
   using ArrayViewType = ArrayView<T>;
 
   py::class_<ArrayViewType>(m, type_name.c_str())
-    .def_property_readonly(
-        "shape", [](const ArrayViewType& self) { return self.shape; })
-    .def_property_readonly(
-        "ndim", [](const ArrayViewType& self) { return self.shape.size(); })
-    .def_property_readonly(
-        "dtype", [](const ArrayViewType& self) { return self.dtype; })
-    .def("__getitem__", &ArrayViewType::operator[])
+    .def_property_readonly("shape", [](const ArrayViewType& self) { return self.shape; })
+    .def_property_readonly("ndim",  [](const ArrayViewType& self) { return self.shape.size(); })
+    .def_property_readonly("dtype", [](const ArrayViewType& self) { return self.dtype; })
+    .def("__getitem__", [](const ArrayViewType& self, py::object idx) -> py::object {
+        auto out = self[idx];
+        if (std::holds_alternative<py::array_t<T>>(out)) {
+          return py::cast(std::get<py::array_t<T>>(out));
+        }
+        return py::cast(std::get<ArrayViewType>(out));
+    })
     .def("__repr__", &ArrayViewType::repr)
     .def("__str__", &ArrayViewType::repr)
     .def("__add__", &ArrayViewType::add, py::is_operator())
     .def("__mul__", &ArrayViewType::mul, py::is_operator())
     .def("__truediv__", &ArrayViewType::truediv, py::is_operator());
 }
+
 
 /**
  * Note: Must be careful in the class definitions for selecting the "holder"
@@ -897,32 +903,90 @@ PYBIND11_MODULE(_xtcpp, pyxtcpp_module, py::mod_gil_not_used()) {
     .def(py::init([](size_t batch_size) {
       return new XTCPP::MPI::HDF5Writer(MPI_COMM_WORLD, batch_size);
     }))
-    .def("event", [](XTCPP::MPI::HDF5Writer& self,
-                     py::dict event_data,
-                     py::dict event_shape) {
-      std::map<std::string, std::any> evt_data;
-      std::map<std::string, std::vector<size_t>> evt_shape;
-      for (auto& item : evt_data) {
-        std::string dset_name = py::str(item.first);
-        py::object val = std::any_cast<py::object>(item.second);
-        if (py::isinstance<py::array>(val)) {
-          py::array arr = val.cast<py::array>();
-          py::buffer_info buf_info = arr.request();
-          std::vector<std::float32_t> vec(buf_info.size);
-          std::memcpy(vec.data(), buf_info.ptr, buf_info.size*sizeof(std::float32_t));
-          evt_data[dset_name] = std::move(vec);
-        }
-      }
-      for (auto& item : evt_shape) {
-        std::string dset_name = py::str(item.first);
-        evt_shape[dset_name] = std::move(item.second);
-      }
-      self.event(evt_data, evt_shape);
-    })
-    .def("save_summary", &XTCPP::MPI::HDF5Writer::save_summary)
+    .def("event",
+         [](XTCPP::MPI::HDF5Writer& self,
+            py::dict event_data,
+            py::dict event_shape) {
+           std::map<std::string, std::any> evt_data;
+           std::map<std::string, std::vector<size_t>> evt_shape;
+
+           // --- Copy/convert data dict ---
+           for (auto item : event_data) {
+             std::string key = py::cast<std::string>(item.first);
+             py::handle v = item.second;
+
+             if (v.is_none()) continue;
+
+             // numpy array -> vector<float>
+             if (py::isinstance<py::array>(v)) {
+               py::array arr = py::reinterpret_borrow<py::array>(v);
+               // forcecast to float32 + C-contiguous
+               py::array_t<float, py::array::c_style | py::array::forcecast> farr(arr);
+               auto buf = farr.request();
+               float* ptr = static_cast<float*>(buf.ptr);
+
+               size_t n = 1;
+               for (auto s : buf.shape) n *= static_cast<size_t>(s);
+
+               std::vector<float> vec(ptr, ptr + n);
+               evt_data[key] = std::move(vec);
+             }
+             // scalar int/float -> double
+             else if (py::isinstance<py::float_>(v) || py::isinstance<py::int_>(v)) {
+               evt_data[key] = py::cast<double>(v);
+             }
+             // else: skip (strings, dicts, lists of mixed things, etc.)
+           }
+
+           // --- Copy shape dict (list[int] / tuple[int]) ---
+           for (auto item : event_shape) {
+             std::string key = py::cast<std::string>(item.first);
+             evt_shape[key] = py::cast<std::vector<size_t>>(item.second);
+           }
+
+           self.event(evt_data, evt_shape);
+         })
+    .def("save_summary",
+         [](XTCPP::MPI::HDF5Writer& self,
+            py::dict summary_data,
+            py::dict summary_shape) {
+           std::map<std::string, std::any> sum_data;
+           std::map<std::string, std::vector<size_t>> sum_shape;
+
+           for (auto item : summary_data) {
+             std::string key = py::cast<std::string>(item.first);
+             py::handle v = item.second;
+             if (v.is_none()) continue;
+
+             if (py::isinstance<py::array>(v)) {
+               py::array arr = py::reinterpret_borrow<py::array>(v);
+               py::array_t<float, py::array::c_style | py::array::forcecast> farr(arr);
+               auto buf = farr.request();
+               float* ptr = static_cast<float*>(buf.ptr);
+
+               size_t n = 1;
+               for (auto s : buf.shape) n *= static_cast<size_t>(s);
+
+               std::vector<float> vec(ptr, ptr + n);
+               sum_data[key] = std::move(vec);
+             }
+             else if (py::isinstance<py::float_>(v) || py::isinstance<py::int_>(v)) {
+               sum_data[key] = py::cast<double>(v);
+             }
+           }
+
+           for (auto item : summary_shape) {
+             std::string key = py::cast<std::string>(item.first);
+             sum_shape[key] = py::cast<std::vector<size_t>>(item.second);
+           }
+
+           self.save_summary(sum_data, sum_shape);
+         })
+    .def("open_file", &XTCPP::MPI::HDF5Writer::open_file)
     .def("rank", &XTCPP::MPI::HDF5Writer::rank)
     .def("mpi_size", &XTCPP::MPI::HDF5Writer::size)
     .def("current_batch_size", &XTCPP::MPI::HDF5Writer::current_batch_size);
+
 
   py::class_<XTCPP::MPI::BDReader>(pyxtcpp_module, "MPIBDReader")
     //std::shared_ptr<XTCPP::Base::BDReader>>(pyxtcpp_module, "MPIBDReader")
