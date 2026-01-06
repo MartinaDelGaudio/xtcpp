@@ -821,7 +821,7 @@ void bind_arrayview(py::module_& m, const std::string& type_name) {
     .def("__getitem__", [](const ArrayViewType& self, py::object idx) -> py::object {
         auto out = self[idx];
         if (std::holds_alternative<py::array_t<T>>(out)) {
-          return py::cast(std::get<py::array_t<T>>(out));
+          return std::move(std::get<py::array_t<T>>(out));
         }
         return py::cast(std::get<ArrayViewType>(out));
     })
